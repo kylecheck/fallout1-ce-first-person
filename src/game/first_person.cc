@@ -347,13 +347,17 @@ void first_person_render()
         return a.z > b.z;
     });
 
-    // v0.013: reconstruct walls as fixed world-space segments instead of
-    // camera-facing cards. Fallout wall art is authored on the isometric
-    // screen, so infer the structural axis from the decoded FRM footprint:
-    // narrow pieces with signed frame X offsets identify the two diagonal
-    // wall families; centered/wider pieces use their bottom opaque footprint
-    // to choose the closest matching hex axis. This is deliberately geometric
-    // first -- the original FRM is then sampled across the resulting plane.
+    // v0.015: reconstruct walls on Fallout's actual hex-chain axes.
+    //
+    // The previous pass used 0/+60/-60 degree planes. Those are the EDGE axes
+    // of our hexes, but Fallout places consecutive wall objects on HEX CENTERS.
+    // In the world basis used by tileToWorld, neighboring centers lie on
+    // +30/+90/-30 degree axes. That 30-degree error was enough to make a room
+    // explode into crossing strips as the camera rotated.
+    //
+    // Prefer topology over artwork metadata: nearby wall objects tell us which
+    // way a wall chain actually runs. FRM offsets remain a fallback for isolated
+    // end/corner/special pieces. We still use the original art as texture.
     for (const FirstPersonWallSprite& wall : walls) {
         CacheEntry* cacheEntry = nullptr;
         Art* art = art_ptr_lock(wall.fid, &cacheEntry);
@@ -368,43 +372,100 @@ void first_person_render()
             continue;
         }
 
-        // Estimate the visible footprint from the lowest rows containing art.
-        int minBottomX = frame->width;
-        int maxBottomX = -1;
-        const int footprintRows = std::min(18, static_cast<int>(frame->height));
-        for (int sy = frame->height - footprintRows; sy < frame->height; sy++) {
+        // Find the opaque art bounds. Sampling only this region prevents the
+        // large transparent margins/anchors in isometric FRMs from becoming
+        // stretched empty sections of a first-person wall.
+        int opaqueMinX = frame->width;
+        int opaqueMaxX = -1;
+        int opaqueMinY = frame->height;
+        int opaqueMaxY = -1;
+        for (int sy = 0; sy < frame->height; sy++) {
             for (int sx = 0; sx < frame->width; sx++) {
                 if (pixels[sy * frame->width + sx] != 0) {
-                    minBottomX = std::min(minBottomX, sx);
-                    maxBottomX = std::max(maxBottomX, sx);
+                    opaqueMinX = std::min(opaqueMinX, sx);
+                    opaqueMaxX = std::max(opaqueMaxX, sx);
+                    opaqueMinY = std::min(opaqueMinY, sy);
+                    opaqueMaxY = std::max(opaqueMaxY, sy);
                 }
             }
         }
+        if (opaqueMaxX < opaqueMinX || opaqueMaxY < opaqueMinY) {
+            art_ptr_unlock(cacheEntry);
+            continue;
+        }
 
-        // Fallout's common wall families expose useful anchoring in the FRM
-        // frame offset. Signed offsets separate the two diagonal axes. Centered
-        // pieces default to the third hex axis; the bottom-footprint bias helps
-        // corners and wider special pieces choose a diagonal when appropriate.
-        int axis = 0;
-        if (frame->x > 3) {
-            axis = 1;
-        } else if (frame->x < -3) {
-            axis = 2;
-        } else if (maxBottomX >= minBottomX) {
-            const double footprintCenter = (minBottomX + maxBottomX) * 0.5;
-            const double bias = footprintCenter - (frame->width - 1) * 0.5;
-            if (bias > 4.0) {
-                axis = 1;
-            } else if (bias < -4.0) {
-                axis = 2;
+        // Determine the structural axis from neighboring wall tiles. This is
+        // much stronger evidence than the shape of a 2D isometric sprite.
+        // Fold opposite directions together because a wall plane has no arrow.
+        constexpr double kChainAngles[3] = { kPi / 6.0, kPi / 2.0, -kPi / 6.0 };
+        int axisVotes[3] = { 0, 0, 0 };
+        for (const FirstPersonWallSprite& neighbor : walls) {
+            if (&neighbor == &wall) {
+                continue;
+            }
+
+            const double ndx = neighbor.worldX - wall.worldX;
+            const double ndy = neighbor.worldY - wall.worldY;
+            const double distance = std::sqrt(ndx * ndx + ndy * ndy);
+            if (distance < 0.70 || distance > 1.15) {
+                continue;
+            }
+
+            const double nx = ndx / distance;
+            const double ny = ndy / distance;
+            double bestAlignment = -1.0;
+            int bestAxis = 0;
+            for (int candidate = 0; candidate < 3; candidate++) {
+                const double candidateX = std::cos(kChainAngles[candidate]);
+                const double candidateY = std::sin(kChainAngles[candidate]);
+                const double alignment = std::abs(nx * candidateX + ny * candidateY);
+                if (alignment > bestAlignment) {
+                    bestAlignment = alignment;
+                    bestAxis = candidate;
+                }
+            }
+            if (bestAlignment > 0.92) {
+                axisVotes[bestAxis]++;
             }
         }
 
-        constexpr double kAxisAngles[3] = { 0.0, kPi / 3.0, -kPi / 3.0 };
-        const double axisX = std::cos(kAxisAngles[axis]);
-        const double axisY = std::sin(kAxisAngles[axis]);
-        const double worldWidth = std::clamp(frame->width / 32.0, 0.50, 1.50);
-        constexpr double kWallHeight = 1.65;
+        int axis = 0;
+        if (axisVotes[1] > axisVotes[axis]) {
+            axis = 1;
+        }
+        if (axisVotes[2] > axisVotes[axis]) {
+            axis = 2;
+        }
+
+        // Isolated pieces have no topology vote. Use the signed FRM anchor as
+        // a fallback, but map it onto the corrected center-to-center axes.
+        if (axisVotes[0] == 0 && axisVotes[1] == 0 && axisVotes[2] == 0) {
+            if (frame->x > 3) {
+                axis = 0;
+            } else if (frame->x < -3) {
+                axis = 2;
+            } else {
+                axis = 1;
+            }
+        }
+
+        const double axisX = std::cos(kChainAngles[axis]);
+        const double axisY = std::sin(kChainAngles[axis]);
+
+        // Adjacent hex centers are one world unit apart in this basis. Normal
+        // wall pieces should therefore occupy one unit regardless of how much
+        // transparent/isometric padding their FRM happens to contain. Wider
+        // special art gets a modest extension rather than the old 1.5x stretch.
+        const int opaqueWidth = opaqueMaxX - opaqueMinX + 1;
+        const int opaqueHeight = opaqueMaxY - opaqueMinY + 1;
+        double worldWidth = 1.02;
+        if (opaqueWidth >= 44) {
+            worldWidth = 1.35;
+        }
+
+        // Scale visible height from the common ~110px Fallout wall artwork,
+        // with sane limits for short/special pieces.
+        const double worldHeight = std::clamp(opaqueHeight * (1.65 / 110.0), 0.65, 1.85);
 
         const double endpointAX = wall.worldX - axisX * worldWidth * 0.5;
         const double endpointAY = wall.worldY - axisY * worldWidth * 0.5;
@@ -440,8 +501,8 @@ void first_person_render()
         const int screenBX = width / 2 + static_cast<int>(bx * focal / bz);
         const int bottomAY = horizon + static_cast<int>(focal * kEyeHeight / az);
         const int bottomBY = horizon + static_cast<int>(focal * kEyeHeight / bz);
-        const int topAY = bottomAY - static_cast<int>(focal * kWallHeight / az);
-        const int topBY = bottomBY - static_cast<int>(focal * kWallHeight / bz);
+        const int topAY = bottomAY - static_cast<int>(focal * worldHeight / az);
+        const int topBY = bottomBY - static_cast<int>(focal * worldHeight / bz);
 
         const int minX = std::max(0, std::min(screenAX, screenBX));
         const int maxX = std::min(width - 1, std::max(screenAX, screenBX));
@@ -480,9 +541,15 @@ void first_person_render()
                 continue;
             }
 
-            const int sourceX = std::clamp(static_cast<int>(worldT * (frame->width - 1)), 0, frame->width - 1);
+            const int sourceX = std::clamp(
+                opaqueMinX + static_cast<int>(worldT * std::max(0, opaqueWidth - 1)),
+                opaqueMinX,
+                opaqueMaxX);
             for (int screenY = std::max(0, top); screenY <= std::min(height - 1, bottom); screenY++) {
-                const int sourceY = std::clamp((screenY - top) * frame->height / columnHeight, 0, frame->height - 1);
+                const int sourceY = std::clamp(
+                    opaqueMinY + (screenY - top) * opaqueHeight / columnHeight,
+                    opaqueMinY,
+                    opaqueMaxY);
                 const unsigned char pixel = pixels[sourceY * frame->width + sourceX];
                 if (pixel == 0) {
                     continue;
