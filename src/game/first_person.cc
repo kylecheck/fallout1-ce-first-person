@@ -14,7 +14,7 @@
 namespace fallout {
 
 // Prototype test: start enabled so Steam Deck testing does not depend on keyboard mappings.
-static bool gFirstPersonEnabled = true;
+static bool gFirstPersonEnabled = false;
 
 static void drawQuad(unsigned char* buffer, int pitch,
     int x0, int y0, int x1, int y1, int x2, int y2, int x3, int y3, int color)
@@ -65,20 +65,26 @@ void first_person_render()
     buf_fill(buffer, width, horizon, width, sky);
     buf_fill(buffer + horizon * width, width, height - horizon, width, ground);
 
-    int playerX;
-    int playerY;
-    if (tile_coord(obj_dude->tile, &playerX, &playerY, map_elevation) != 0) {
-        return;
-    }
+    // Fallout stores map hexes in a 200x200 staggered-column grid. Convert
+    // directly from tile number to a regular 2D hex plane instead of using
+    // tile_coord(), which is an isometric SCREEN projection.
+    constexpr int kHexGridWidth = 200;
+    constexpr double kSqrt3Over2 = 0.8660254037844386;
+
+    const int playerColumn = obj_dude->tile % kHexGridWidth;
+    const int playerRow = obj_dude->tile / kHexGridWidth;
+    const double playerWorldX = -playerColumn * kSqrt3Over2;
+    const double playerWorldY = playerRow - (playerColumn & 1) * 0.5;
 
     const int rotation = ((obj_dude->rotation % ROTATION_COUNT) + ROTATION_COUNT) % ROTATION_COUNT;
-    const double yaw = rotation * (3.14159265358979323846 / 3.0);
-    // tile_coord is screen/isometric space. This is only an approximate world
-    // basis for v0.002, but it preserves real map-relative wall placement.
-    const double forwardX = std::sin(yaw);
-    const double forwardY = -std::cos(yaw);
-    const double rightX = std::cos(yaw);
-    const double rightY = std::sin(yaw);
+    // Fallout rotations are NE, E, SE, SW, W, NW. In this world basis NE is
+    // -30 degrees, then each rotation advances by 60 degrees.
+    const double yaw = -3.14159265358979323846 / 6.0
+        + rotation * (3.14159265358979323846 / 3.0);
+    const double forwardX = std::cos(yaw);
+    const double forwardY = std::sin(yaw);
+    const double rightX = -forwardY;
+    const double rightY = forwardX;
     const double focal = width * 0.70;
 
     // A few depth guides make it easier to judge whether real wall positions
@@ -102,16 +108,13 @@ void first_person_render()
             continue;
         }
 
-        int wallX;
-        int wallY;
-        if (tile_coord(object->tile, &wallX, &wallY, map_elevation) != 0) {
-            continue;
-        }
+        const int wallColumn = object->tile % kHexGridWidth;
+        const int wallRow = object->tile / kHexGridWidth;
+        const double wallWorldX = -wallColumn * kSqrt3Over2;
+        const double wallWorldY = wallRow - (wallColumn & 1) * 0.5;
 
-        // Normalize Fallout's isometric screen deltas into a rough 2D world
-        // plane before rotating them into camera space.
-        const double dx = (wallX - playerX) / 32.0;
-        const double dy = (wallY - playerY) / 12.0;
+        const double dx = wallWorldX - playerWorldX;
+        const double dy = wallWorldY - playerWorldY;
         const double cameraX = dx * rightX + dy * rightY;
         const double cameraZ = dx * forwardX + dy * forwardY;
 
