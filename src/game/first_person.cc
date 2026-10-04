@@ -19,20 +19,38 @@ namespace fallout {
 
 static bool gFirstPersonEnabled = false;
 
-// v0.006 diagnostic: report each distinct wall-art/rotation combination once.
-// This lets us derive Fallout's real wall orientation rules from the user's
-// actual map data instead of continuing to infer topology from neighboring hexes.
-static std::set<long long> gReportedWallVariants;
+// v0.008: render each real Fallout wall object from its decoded FRM pixels.\n// We deliberately keep this independent of the old neighbor-connectivity pass\n// so a decorative/invisible wall cannot create a giant false wall plane.\nstruct FirstPersonWallSprite {\n    int fid;\n    int direction;\n    double x;\n    double z;\n};\n\nbool first_person_is_enabled()
+{
+    return gFirstPersonEnabled;
+}
 
-struct FirstPersonWall {
-    double x0;
-    double z0;
-    double x1;
-    double z1;
-    double depth;
-};
+void first_person_toggle()
+{
+    gFirstPersonEnabled = !gFirstPersonEnabled;
+}
 
-bool first_person_is_enabled()
+void first_person_render()\n{\n    if (!gFirstPersonEnabled || obj_dude == nullptr || display_win == -1) {\n        return;\n    }\n\n    unsigned char* buffer = win_get_buf(display_win);\n    if (buffer == nullptr) {\n        return;\n    }\n\n    const int width = win_width(display_win);\n    const int height = win_height(display_win);\n    if (width <= 0 || height <= 0) {\n        return;\n    }\n\n    const int sky = colorTable[0];\n    const int ground = colorTable[10570];\n    const int gridColor = colorTable[992];\n    const int crosshairColor = colorTable[31744];\n\n    const int horizon = height * 43 / 100;\n    buf_fill(buffer, width, horizon, width, sky);\n    buf_fill(buffer + horizon * width, width, height - horizon, width, ground);\n\n    constexpr int kHexGridWidth = 200;\n    constexpr double kSqrt3Over2 = 0.8660254037844386;\n    constexpr double kPi = 3.14159265358979323846;\n    constexpr double kNearPlane = 0.45;\n    constexpr double kFarPlane = 36.0;\n\n    auto tileToWorld = [](int tile, double* x, double* y) {\n        const int column = tile % kHexGridWidth;\n        const int row = tile / kHexGridWidth;\n        *x = -column * kSqrt3Over2;\n        *y = row - (column & 1) * 0.5;\n    };\n\n    double playerWorldX;\n    double playerWorldY;\n    tileToWorld(obj_dude->tile, &playerWorldX, &playerWorldY);\n\n    const int rotation = ((obj_dude->rotation % ROTATION_COUNT) + ROTATION_COUNT) % ROTATION_COUNT;\n    const double yaw = -kPi / 6.0 + rotation * (kPi / 3.0);\n    const double forwardX = std::cos(yaw);\n    const double forwardY = std::sin(yaw);\n    const double rightX = -forwardY;\n    const double rightY = forwardX;\n    const double focal = width * 0.70;\n\n    for (int depth = 1; depth <= 8; depth++) {\n        const int y = horizon + static_cast<int>((height - horizon) * (1.0 - 1.0 / (1.0 + depth * 0.55)));\n        draw_line(buffer, width, 0, y, width - 1, y, gridColor);\n    }\n\n    std::vector<FirstPersonWallSprite> walls;\n    for (Object* wall = obj_find_first_at(map_elevation);\n         wall != nullptr;\n         wall = obj_find_next_at()) {\n        if (wall == obj_dude\n            || wall->tile < 0\n            || FID_TYPE(wall->fid) != OBJ_TYPE_WALL\n            || tile_dist(obj_dude->tile, wall->tile) > 18) {\n            continue;\n        }\n\n        // block.frm is Fallout's 1x1 invisible collision wall. It belongs in\n        // future collision handling, not in the visible first-person scene.\n        const int frmId = wall->fid & 0xFFF;\n        char artName[64] = { 0 };\n        if (art_get_base_name(OBJ_TYPE_WALL, frmId, artName) == -1\n            || std::strcmp(artName, "block.frm") == 0) {\n            continue;\n        }\n\n        double wallWorldX;\n        double wallWorldY;\n        tileToWorld(wall->tile, &wallWorldX, &wallWorldY);\n        const double dx = wallWorldX - playerWorldX;\n        const double dy = wallWorldY - playerWorldY;\n        const double cameraX = dx * rightX + dy * rightY;\n        const double cameraZ = dx * forwardX + dy * forwardY;\n        if (cameraZ < kNearPlane || cameraZ > kFarPlane) {\n            continue;\n        }\n\n        const int direction = ((wall->rotation % ROTATION_COUNT) + ROTATION_COUNT) % ROTATION_COUNT;\n        walls.push_back({ wall->fid, direction, cameraX, cameraZ });\n    }\n\n    // Fallout's normal renderer is painter based too. Drawing distant sprites\n    // first gives us a useful first pass at wall occlusion without a z-buffer.\n    std::sort(walls.begin(), walls.end(), [](const FirstPersonWallSprite& a, const FirstPersonWallSprite& b) {\n        return a.z > b.z;\n    });\n\n    for (const FirstPersonWallSprite& wall : walls) {\n        CacheEntry* cacheEntry = nullptr;\n        Art* art = art_ptr_lock(wall.fid, &cacheEntry);\n        if (art == nullptr) {\n            continue;\n        }\n\n        ArtFrame* frame = frame_ptr(art, 0, wall.direction);\n        unsigned char* pixels = art_frame_data(art, 0, wall.direction);\n        if (frame == nullptr || pixels == nullptr || frame->width <= 0 || frame->height <= 0) {\n            art_ptr_unlock(cacheEntry);\n            continue;\n        }\n\n        // The FRM width is useful structural information: common 16/32/48 px\n        // Fallout wall pieces become half/full/one-and-a-half hex wide here.\n        // Height is normalized because the original FRM includes isometric\n        // projection rather than a front-facing physical measurement.\n        const double worldWidth = std::max(0.35, frame->width / 32.0);\n        constexpr double kWallHeight = 1.65;\n        const int projectedWidth = std::max(1, static_cast<int>(focal * worldWidth / wall.z));\n        const int projectedHeight = std::max(1, static_cast<int>(focal * kWallHeight / wall.z));\n        const int centerX = width / 2 + static_cast<int>(wall.x * focal / wall.z);\n        const int bottom = horizon + std::clamp(static_cast<int>(focal * 0.50 / wall.z), 0, height - horizon - 1);\n        const int left = centerX - projectedWidth / 2;\n        const int top = bottom - projectedHeight;\n\n        for (int screenY = std::max(0, top); screenY <= std::min(height - 1, bottom); screenY++) {\n            const int sourceY = std::clamp((screenY - top) * frame->height / projectedHeight, 0, frame->height - 1);\n            for (int screenX = std::max(0, left); screenX < std::min(width, left + projectedWidth); screenX++) {\n                const int sourceX = std::clamp((screenX - left) * frame->width / projectedWidth, 0, frame->width - 1);\n                const unsigned char pixel = pixels[sourceY * frame->width + sourceX];\n\n                // Palette index 0 is transparent in Fallout FRM artwork. Copy\n                // every other index directly: our target is the same 8-bit\n                // framebuffer/palette used by the original renderer.\n                if (pixel != 0) {\n                    buffer[screenY * width + screenX] = pixel;\n                }\n            }\n        }\n\n        art_ptr_unlock(cacheEntry);\n    }\n\n    draw_line(buffer, width, width / 2 - 7, height / 2, width / 2 + 7, height / 2, crosshairColor);\n    draw_line(buffer, width, width / 2, height / 2 - 7, width / 2, height / 2 + 7, crosshairColor);\n}\ninclude "game/first_person.h"
+
+#include <algorithm>
+#include <cmath>
+#include <cstdio>
+#include <set>
+#include <vector>
+
+#include "game/art.h"
+#include "game/map.h"
+#include "game/object_types.h"
+#include "game/tile.h"
+#include "game/object.h"
+#include "plib/color/color.h"
+#include "plib/gnw/gnw.h"
+#include "plib/gnw/grbuf.h"
+
+namespace fallout {
+
+static bool gFirstPersonEnabled = false;
+
+// v0.008: render each real Fallout wall object from its decoded FRM pixels.\n// We deliberately keep this independent of the old neighbor-connectivity pass\n// so a decorative/invisible wall cannot create a giant false wall plane.\nstruct FirstPersonWallSprite {\n    int fid;\n    int direction;\n    double x;\n    double z;\n};\n\nbool first_person_is_enabled()
 {
     return gFirstPersonEnabled;
 }
