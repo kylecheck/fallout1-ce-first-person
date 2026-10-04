@@ -343,7 +343,7 @@ void first_person_render()
         // Estimate the visible footprint from the lowest rows containing art.
         int minBottomX = frame->width;
         int maxBottomX = -1;
-        const int footprintRows = std::min(18, frame->height);
+        const int footprintRows = std::min(18, static_cast<int>(frame->height));
         for (int sy = frame->height - footprintRows; sy < frame->height; sy++) {
             for (int sx = 0; sx < frame->width; sx++) {
                 if (pixels[sy * frame->width + sx] != 0) {
