@@ -713,6 +713,13 @@ int map_get_index_number()
 // 0x474284
 int map_scroll(int dx, int dy)
 {
+    // The isometric camera must stay fixed while the first-person renderer is
+    // active. This catches edge scrolling, wheel scrolling and arrow keys at
+    // the common map-scroll entry point.
+    if (first_person_is_enabled()) {
+        return -1;
+    }
+
     if (elapsed_time(map_last_scroll_time) < 33) {
         return -2;
     }
