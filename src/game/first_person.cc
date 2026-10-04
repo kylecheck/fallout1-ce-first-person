@@ -14,17 +14,15 @@
 
 namespace fallout {
 
-// Prototype test: start enabled so Steam Deck testing does not depend on keyboard mappings.
 static bool gFirstPersonEnabled = false;
 
-static void drawQuad(unsigned char* buffer, int pitch,
-    int x0, int y0, int x1, int y1, int x2, int y2, int x3, int y3, int color)
-{
-    draw_line(buffer, pitch, x0, y0, x1, y1, color);
-    draw_line(buffer, pitch, x1, y1, x2, y2, color);
-    draw_line(buffer, pitch, x2, y2, x3, y3, color);
-    draw_line(buffer, pitch, x3, y3, x0, y0, color);
-}
+struct FirstPersonWall {
+    double x0;
+    double z0;
+    double x1;
+    double z1;
+    double depth;
+};
 
 bool first_person_is_enabled()
 {
@@ -55,7 +53,8 @@ void first_person_render()
 
     const int sky = colorTable[0];
     const int ground = colorTable[10570];
-    const int wallColor = colorTable[31744];
+    const int wallColor = colorTable[21140];
+    const int wallEdgeColor = colorTable[31744];
     const int gridColor = colorTable[992];
     const int crosshairColor = colorTable[31744];
 
@@ -66,6 +65,8 @@ void first_person_render()
     constexpr int kHexGridWidth = 200;
     constexpr double kSqrt3Over2 = 0.8660254037844386;
     constexpr double kPi = 3.14159265358979323846;
+    constexpr double kNearPlane = 0.45;
+    constexpr double kFarPlane = 36.0;
 
     auto tileToWorld = [](int tile, double* x, double* y) {
         const int column = tile % kHexGridWidth;
@@ -86,16 +87,13 @@ void first_person_render()
     const double rightY = forwardX;
     const double focal = width * 0.70;
 
-    // Keep simple depth guides while the geometry conversion is being
-    // validated. They will disappear once textured floors are in place.
+    // Keep the depth guides for one more build so the solid-wall projection is
+    // easy to judge against the previous wireframe prototype.
     for (int depth = 1; depth <= 8; depth++) {
         const int y = horizon + static_cast<int>((height - horizon) * (1.0 - 1.0 / (1.0 + depth * 0.55)));
         draw_line(buffer, width, 0, y, width - 1, y, gridColor);
     }
 
-    // v0.004: collect nearby wall tiles first. The Fallout object iterator has
-    // shared state, so nesting obj_find_first_at/obj_find_next_at calls would
-    // reset the outer iteration and make the wall pass silently fail.
     std::vector<int> wallTiles;
     for (Object* wall = obj_find_first_at(map_elevation);
          wall != nullptr;
@@ -108,8 +106,8 @@ void first_person_render()
         }
     }
 
-    // Connect adjacent real wall hexes. Only inspect half the six directions
-    // so each neighboring pair is emitted once.
+    std::vector<FirstPersonWall> walls;
+
     for (int wallTile : wallTiles) {
         double wallX;
         double wallY;
@@ -117,12 +115,8 @@ void first_person_render()
 
         for (int direction = 0; direction < 3; direction++) {
             const int neighborTile = tile_num_in_direction(wallTile, direction, 1);
-            if (neighborTile == wallTile) {
-                continue;
-            }
-
-            const bool hasWallNeighbor = std::find(wallTiles.begin(), wallTiles.end(), neighborTile) != wallTiles.end();
-            if (!hasWallNeighbor) {
+            if (neighborTile == wallTile
+                || std::find(wallTiles.begin(), wallTiles.end(), neighborTile) == wallTiles.end()) {
                 continue;
             }
 
@@ -135,41 +129,84 @@ void first_person_render()
             const double dx1 = neighborX - playerWorldX;
             const double dy1 = neighborY - playerWorldY;
 
-            const double cameraX0 = dx0 * rightX + dy0 * rightY;
-            const double cameraZ0 = dx0 * forwardX + dy0 * forwardY;
-            const double cameraX1 = dx1 * rightX + dy1 * rightY;
-            const double cameraZ1 = dx1 * forwardX + dy1 * forwardY;
+            double cameraX0 = dx0 * rightX + dy0 * rightY;
+            double cameraZ0 = dx0 * forwardX + dy0 * forwardY;
+            double cameraX1 = dx1 * rightX + dy1 * rightY;
+            double cameraZ1 = dx1 * forwardX + dy1 * forwardY;
 
-            if (cameraZ0 <= 0.35 || cameraZ1 <= 0.35 || cameraZ0 > 36.0 || cameraZ1 > 36.0) {
+            if ((cameraZ0 < kNearPlane && cameraZ1 < kNearPlane)
+                || (cameraZ0 > kFarPlane && cameraZ1 > kFarPlane)) {
                 continue;
             }
 
-            const int screenX0 = width / 2 + static_cast<int>(cameraX0 * focal / cameraZ0);
-            const int screenX1 = width / 2 + static_cast<int>(cameraX1 * focal / cameraZ1);
-            const int bottom0 = horizon + std::clamp(static_cast<int>(focal * 0.50 / cameraZ0), 0, height - horizon - 1);
-            const int bottom1 = horizon + std::clamp(static_cast<int>(focal * 0.50 / cameraZ1), 0, height - horizon - 1);
-            const int top0 = bottom0 - std::clamp(static_cast<int>(focal * 1.25 / cameraZ0), 6, height);
-            const int top1 = bottom1 - std::clamp(static_cast<int>(focal * 1.25 / cameraZ1), 6, height);
+            // Clip a segment crossing the camera instead of dropping the whole
+            // wall or allowing a near endpoint to explode across the screen.
+            if (cameraZ0 < kNearPlane) {
+                const double t = (kNearPlane - cameraZ0) / (cameraZ1 - cameraZ0);
+                cameraX0 += (cameraX1 - cameraX0) * t;
+                cameraZ0 = kNearPlane;
+            }
+            if (cameraZ1 < kNearPlane) {
+                const double t = (kNearPlane - cameraZ1) / (cameraZ0 - cameraZ1);
+                cameraX1 += (cameraX0 - cameraX1) * t;
+                cameraZ1 = kNearPlane;
+            }
 
-            if ((screenX0 < 0 && screenX1 < 0)
-                || (screenX0 >= width && screenX1 >= width)
-                || (bottom0 < 0 && bottom1 < 0)
-                || (top0 >= height && top1 >= height)) {
+            if (cameraZ0 > kFarPlane || cameraZ1 > kFarPlane) {
                 continue;
             }
 
-            drawQuad(buffer, width,
-                std::clamp(screenX0, 0, width - 1), std::clamp(bottom0, 0, height - 1),
-                std::clamp(screenX1, 0, width - 1), std::clamp(bottom1, 0, height - 1),
-                std::clamp(screenX1, 0, width - 1), std::clamp(top1, 0, height - 1),
-                std::clamp(screenX0, 0, width - 1), std::clamp(top0, 0, height - 1),
-                wallColor);
+            walls.push_back({ cameraX0, cameraZ0, cameraX1, cameraZ1, (cameraZ0 + cameraZ1) * 0.5 });
         }
+    }
+
+    // Painter's algorithm is sufficient for this prototype: draw distant wall
+    // planes first so nearer planes naturally cover them.
+    std::sort(walls.begin(), walls.end(), [](const FirstPersonWall& a, const FirstPersonWall& b) {
+        return a.depth > b.depth;
+    });
+
+    for (const FirstPersonWall& wall : walls) {
+        const int screenX0 = width / 2 + static_cast<int>(wall.x0 * focal / wall.z0);
+        const int screenX1 = width / 2 + static_cast<int>(wall.x1 * focal / wall.z1);
+        const int bottom0 = horizon + std::clamp(static_cast<int>(focal * 0.50 / wall.z0), 0, height - horizon - 1);
+        const int bottom1 = horizon + std::clamp(static_cast<int>(focal * 0.50 / wall.z1), 0, height - horizon - 1);
+        const int top0 = bottom0 - std::clamp(static_cast<int>(focal * 1.25 / wall.z0), 6, height);
+        const int top1 = bottom1 - std::clamp(static_cast<int>(focal * 1.25 / wall.z1), 6, height);
+
+        const int minX = std::max(0, std::min(screenX0, screenX1));
+        const int maxX = std::min(width - 1, std::max(screenX0, screenX1));
+        if (minX > maxX) {
+            continue;
+        }
+
+        // Fill the projected quadrilateral one screen column at a time. This
+        // stays entirely inside Fallout's existing 8-bit software framebuffer.
+        const double denominator = static_cast<double>(screenX1 - screenX0);
+        for (int x = minX; x <= maxX; x++) {
+            double t = denominator == 0.0 ? 0.0 : (x - screenX0) / denominator;
+            t = std::clamp(t, 0.0, 1.0);
+            int top = static_cast<int>(top0 + (top1 - top0) * t);
+            int bottom = static_cast<int>(bottom0 + (bottom1 - bottom0) * t);
+            if (top > bottom) {
+                std::swap(top, bottom);
+            }
+            top = std::clamp(top, 0, height - 1);
+            bottom = std::clamp(bottom, 0, height - 1);
+            draw_line(buffer, width, x, top, x, bottom, wallColor);
+        }
+
+        // Retain bright edges for debugging the inferred Fallout wall topology.
+        draw_line(buffer, width,
+            std::clamp(screenX0, 0, width - 1), std::clamp(bottom0, 0, height - 1),
+            std::clamp(screenX1, 0, width - 1), std::clamp(bottom1, 0, height - 1), wallEdgeColor);
+        draw_line(buffer, width,
+            std::clamp(screenX0, 0, width - 1), std::clamp(top0, 0, height - 1),
+            std::clamp(screenX1, 0, width - 1), std::clamp(top1, 0, height - 1), wallEdgeColor);
     }
 
     draw_line(buffer, width, width / 2 - 7, height / 2, width / 2 + 7, height / 2, crosshairColor);
     draw_line(buffer, width, width / 2, height / 2 - 7, width / 2, height / 2 + 7, crosshairColor);
 }
-
 
 } // namespace fallout
