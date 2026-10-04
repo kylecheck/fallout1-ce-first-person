@@ -14,6 +14,7 @@
 #include "plib/color/color.h"
 #include "plib/gnw/gnw.h"
 #include "plib/gnw/grbuf.h"
+#include "plib/gnw/mouse.h"
 
 namespace fallout {
 
@@ -213,31 +214,39 @@ void first_person_render()
         art_ptr_unlock(entry.cacheEntry);
     }
 
-    // v0.010: show the exact Fallout hex selected by "move forward".
-    // This uses the same destination calculation as the first-person movement
-    // controls, then projects that hex back onto the perspective floor.
-    const int moveTargetTile = tile_num_in_direction(obj_dude->tile, rotation, 1);
-    if (moveTargetTile >= 0) {
+    // v0.014: first-person mouse-to-world targeting.
+    //
+    // The mouse position defines a camera ray. Intersect that ray with the
+    // ground plane, convert the hit back through Fallout's isometric mapping,
+    // then let tile_num resolve the actual engine hex. The highlighted hex is
+    // therefore Fallout's own tile, not a second approximation of the map.
+    int mouseX = width / 2;
+    int mouseY = height / 2;
+    mouse_get_position(&mouseX, &mouseY);
+
+    int targetTile = -1;
+    if (mouseX >= 0 && mouseX < width && mouseY > horizon && mouseY < height) {
+        const double cameraZ = focal * kEyeHeight / (mouseY - horizon);
+        if (cameraZ >= kNearPlane && cameraZ <= kFarPlane) {
+            const double cameraX = (mouseX - width * 0.5) * cameraZ / focal;
+            const double worldDx = rightX * cameraX + forwardX * cameraZ;
+            const double worldDy = rightY * cameraX + forwardY * cameraZ;
+            const int isoX = playerIsoX + static_cast<int>(std::lround(kIsoXFromWorldX * worldDx + 16.0 * worldDy));
+            const int isoY = playerIsoY + static_cast<int>(std::lround(kIsoYFromWorldX * worldDx + 12.0 * worldDy));
+            targetTile = tile_num(isoX, isoY, map_elevation, false);
+        }
+    }
+
+    if (targetTile >= 0) {
         double targetWorldX;
         double targetWorldY;
-        tileToWorld(moveTargetTile, &targetWorldX, &targetWorldY);
+        tileToWorld(targetTile, &targetWorldX, &targetWorldY);
 
-        const double targetDx = targetWorldX - playerWorldX;
-        const double targetDy = targetWorldY - playerWorldY;
-        const double centerCameraX = targetDx * rightX + targetDy * rightY;
-        const double centerCameraZ = targetDx * forwardX + targetDy * forwardY;
-
-        // Six corners around the selected hex center in our world coordinate
-        // system. Project each ground point with the same camera used above.
-        // Keep the marker comfortably inside the destination hex. The previous
-        // radius let the near corners cross the camera near-plane when the
-        // target was only one hex away, which made this diagnostic fragile.
         constexpr double kHexRadius = 0.32;
         int hexX[6];
         int hexY[6];
-        bool hexVisible = centerCameraZ > kNearPlane;
-
-        for (int corner = 0; corner < 6 && hexVisible; corner++) {
+        bool hexVisible = true;
+        for (int corner = 0; corner < 6; corner++) {
             const double angle = corner * kPi / 3.0;
             const double worldX = targetWorldX + std::cos(angle) * kHexRadius;
             const double worldY = targetWorldY + std::sin(angle) * kHexRadius;
@@ -245,14 +254,17 @@ void first_person_render()
             const double dy = worldY - playerWorldY;
             const double cameraX = dx * rightX + dy * rightY;
             const double cameraZ = dx * forwardX + dy * forwardY;
-
             if (cameraZ <= kNearPlane) {
                 hexVisible = false;
                 break;
             }
-
             hexX[corner] = width / 2 + static_cast<int>(cameraX * focal / cameraZ);
             hexY[corner] = horizon + static_cast<int>(focal * kEyeHeight / cameraZ);
+            if (hexX[corner] < -width || hexX[corner] > width * 2
+                || hexY[corner] < -height || hexY[corner] > height * 2) {
+                hexVisible = false;
+                break;
+            }
         }
 
         if (hexVisible) {
@@ -261,13 +273,29 @@ void first_person_render()
                 const int next = (corner + 1) % 6;
                 draw_line(buffer, width, hexX[corner], hexY[corner], hexX[next], hexY[next], highlightColor);
             }
+        }
+    }
 
-            // A small center marker makes the destination unmistakable even
-            // when perspective compresses the far edge of the hex.
-            const int centerX = width / 2 + static_cast<int>(centerCameraX * focal / centerCameraZ);
-            const int centerY = horizon + static_cast<int>(focal * kEyeHeight / centerCameraZ);
-            draw_line(buffer, width, centerX - 3, centerY, centerX + 3, centerY, highlightColor);
-            draw_line(buffer, width, centerX, centerY - 3, centerX, centerY + 3, highlightColor);
+    // Draw an explicit first-person pointer after our scene has covered the
+    // normal Fallout map cursor. This is intentionally simple and high contrast
+    // for the prototype; the important part is that its tip and highlighted
+    // engine hex now agree.
+    if (mouseX >= 0 && mouseX < width && mouseY >= 0 && mouseY < height) {
+        const int pointerColor = colorTable[31744];
+        const int pointerShadow = colorTable[0];
+        for (int i = 0; i <= 9; i++) {
+            if (mouseY + i < height) {
+                buffer[(mouseY + i) * width + mouseX] = pointerShadow;
+                if (mouseX + 1 < width) {
+                    buffer[(mouseY + i) * width + mouseX + 1] = pointerColor;
+                }
+            }
+            if (mouseX + i < width) {
+                buffer[mouseY * width + mouseX + i] = pointerShadow;
+                if (mouseY + 1 < height) {
+                    buffer[(mouseY + 1) * width + mouseX + i] = pointerColor;
+                }
+            }
         }
     }
 
