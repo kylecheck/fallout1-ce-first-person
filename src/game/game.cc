@@ -812,7 +812,7 @@ int game_handle_input(int eventCode, bool isInCombatMode)
         game_help();
         break;
     case KEY_F11:
-    case KEY_0:
+    case KEY_0: {
         // Experimental first-person presentation toggle.
         first_person_toggle();
         char firstPersonOn[] = "FIRST PERSON: ON";
@@ -820,6 +820,7 @@ int game_handle_input(int eventCode, bool isInCombatMode)
         display_print(first_person_is_enabled() ? firstPersonOn : firstPersonOff);
         tile_refresh_display();
         break;
+    }
     case KEY_F2:
         gsound_set_master_volume(gsound_get_master_volume() - 2047);
         break;
