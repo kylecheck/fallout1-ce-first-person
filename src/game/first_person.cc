@@ -122,14 +122,41 @@ void first_person_render()
                     std::snprintf(artName, sizeof(artName), "<unknown>");
                 }
 
-                std::printf("FPWALL tile=%d pid=0x%08X fid=0x%08X frm=%d rot=%d art=%s flags=0x%08X\\n",
-                    wall->tile,
-                    static_cast<unsigned int>(wall->pid),
-                    static_cast<unsigned int>(wall->fid),
-                    frmId,
-                    wall->rotation,
-                    artName,
-                    static_cast<unsigned int>(wall->flags));
+                CacheEntry* artCacheEntry = nullptr;
+                Art* art = art_ptr_lock(wall->fid, &artCacheEntry);
+                if (art != nullptr) {
+                    const int direction = ((wall->rotation % ROTATION_COUNT) + ROTATION_COUNT) % ROTATION_COUNT;
+                    ArtFrame* frame = frame_ptr(art, 0, direction);
+                    int frameOffsetX = 0;
+                    int frameOffsetY = 0;
+                    art_frame_offset(art, direction, &frameOffsetX, &frameOffsetY);
+
+                    std::printf("FPWALL tile=%d pid=0x%08X fid=0x%08X frm=%d rot=%d art=%s flags=0x%08X size=%dx%d frameXY=%d,%d dirOffset=%d,%d\n",
+                        wall->tile,
+                        static_cast<unsigned int>(wall->pid),
+                        static_cast<unsigned int>(wall->fid),
+                        frmId,
+                        wall->rotation,
+                        artName,
+                        static_cast<unsigned int>(wall->flags),
+                        frame != nullptr ? frame->width : 0,
+                        frame != nullptr ? frame->height : 0,
+                        frame != nullptr ? frame->x : 0,
+                        frame != nullptr ? frame->y : 0,
+                        frameOffsetX,
+                        frameOffsetY);
+
+                    art_ptr_unlock(artCacheEntry);
+                } else {
+                    std::printf("FPWALL tile=%d pid=0x%08X fid=0x%08X frm=%d rot=%d art=%s flags=0x%08X art=<lock-failed>\n",
+                        wall->tile,
+                        static_cast<unsigned int>(wall->pid),
+                        static_cast<unsigned int>(wall->fid),
+                        frmId,
+                        wall->rotation,
+                        artName,
+                        static_cast<unsigned int>(wall->flags));
+                }
                 std::fflush(stdout);
             }
         }
