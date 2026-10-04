@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <vector>
 
 #include "game/map.h"
 #include "game/object_types.h"
@@ -92,43 +93,35 @@ void first_person_render()
         draw_line(buffer, width, 0, y, width - 1, y, gridColor);
     }
 
-    // v0.004: build wall connectivity from the real hex map. Each nearby wall
-    // hex is connected to adjacent wall hexes, producing perspective line
-    // segments that follow the room/corridor structure instead of drawing one
-    // camera-facing rectangle per object.
+    // v0.004: collect nearby wall tiles first. The Fallout object iterator has
+    // shared state, so nesting obj_find_first_at/obj_find_next_at calls would
+    // reset the outer iteration and make the wall pass silently fail.
+    std::vector<int> wallTiles;
     for (Object* wall = obj_find_first_at(map_elevation);
          wall != nullptr;
          wall = obj_find_next_at()) {
-        if (wall == obj_dude || wall->tile < 0 || FID_TYPE(wall->fid) != OBJ_TYPE_WALL) {
-            continue;
+        if (wall != obj_dude
+            && wall->tile >= 0
+            && FID_TYPE(wall->fid) == OBJ_TYPE_WALL
+            && tile_dist(obj_dude->tile, wall->tile) <= 18) {
+            wallTiles.push_back(wall->tile);
         }
+    }
 
-        if (tile_dist(obj_dude->tile, wall->tile) > 18) {
-            continue;
-        }
-
+    // Connect adjacent real wall hexes. Only inspect half the six directions
+    // so each neighboring pair is emitted once.
+    for (int wallTile : wallTiles) {
         double wallX;
         double wallY;
-        tileToWorld(wall->tile, &wallX, &wallY);
+        tileToWorld(wallTile, &wallX, &wallY);
 
-        // Only inspect half the six directions so each neighboring pair is
-        // emitted once.
         for (int direction = 0; direction < 3; direction++) {
-            const int neighborTile = tile_num_in_direction(wall->tile, direction, 1);
-            if (neighborTile == wall->tile) {
+            const int neighborTile = tile_num_in_direction(wallTile, direction, 1);
+            if (neighborTile == wallTile) {
                 continue;
             }
 
-            bool hasWallNeighbor = false;
-            for (Object* candidate = obj_find_first_at(map_elevation);
-                 candidate != nullptr;
-                 candidate = obj_find_next_at()) {
-                if (candidate->tile == neighborTile && FID_TYPE(candidate->fid) == OBJ_TYPE_WALL) {
-                    hasWallNeighbor = true;
-                    break;
-                }
-            }
-
+            const bool hasWallNeighbor = std::find(wallTiles.begin(), wallTiles.end(), neighborTile) != wallTiles.end();
             if (!hasWallNeighbor) {
                 continue;
             }
