@@ -107,6 +107,13 @@ void first_person_render()
     const double rightY = forwardX;
     const double focal = width * 0.70;
 
+    // v0.012: a small software depth buffer shared by the first-person passes.
+    // Fallout's original renderer can rely on isometric draw order; once we
+    // project sprites into perspective that is no longer enough. Keeping depth
+    // per framebuffer pixel gives later wall geometry a proper foundation and
+    // stops distant cardboard sprites from drawing through nearer ones.
+    std::vector<double> depthBuffer(static_cast<size_t>(width) * height, kFarPlane + 1.0);
+
     // v0.009: perspective-map Fallout's real floor tiles onto the ground.
     //
     // Rather than inventing a second floor coordinate system, convert each
@@ -193,7 +200,9 @@ void first_person_render()
 
             const unsigned char pixel = floorArt->pixels[sourceY * floorArt->frame->width + sourceX];
             if (pixel != 0) {
-                buffer[screenY * width + screenX] = pixel;
+                const int destination = screenY * width + screenX;
+                buffer[destination] = pixel;
+                depthBuffer[destination] = cameraZ;
             }
         }
     }
@@ -345,7 +354,11 @@ void first_person_render()
                 // every other index directly: our target is the same 8-bit
                 // framebuffer/palette used by the original renderer.
                 if (pixel != 0) {
-                    buffer[screenY * width + screenX] = pixel;
+                    const int destination = screenY * width + screenX;
+                    if (wall.z < depthBuffer[destination]) {
+                        buffer[destination] = pixel;
+                        depthBuffer[destination] = wall.z;
+                    }
                 }
             }
         }
@@ -445,7 +458,11 @@ void first_person_render()
                 const int sourceX = std::clamp((screenX - left) * frame->width / projectedWidth, 0, frame->width - 1);
                 const unsigned char pixel = pixels[sourceY * frame->width + sourceX];
                 if (pixel != 0) {
-                    buffer[screenY * width + screenX] = pixel;
+                    const int destination = screenY * width + screenX;
+                    if (object.z < depthBuffer[destination]) {
+                        buffer[destination] = pixel;
+                        depthBuffer[destination] = object.z;
+                    }
                 }
             }
         }
