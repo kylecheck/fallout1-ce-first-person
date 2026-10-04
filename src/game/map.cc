@@ -1591,6 +1591,13 @@ static void map_match_map_number()
 // 0x475C3C
 static void map_display_draw(Rect* rect)
 {
+    if (first_person_is_enabled()) {
+        first_person_render();
+        Rect viewport = map_display_rect;
+        win_draw_rect(display_win, &viewport);
+        return;
+    }
+
     win_draw_rect(display_win, rect);
 }
 
