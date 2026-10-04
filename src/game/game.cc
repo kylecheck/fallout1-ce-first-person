@@ -15,6 +15,7 @@
 #include "game/editor.h"
 #include "game/endgame.h"
 #include "game/fontmgr.h"
+#include "game/first_person.h"
 #include "game/gconfig.h"
 #include "game/gdialog.h"
 #include "game/gmemory.h"
@@ -809,6 +810,11 @@ int game_handle_input(int eventCode, bool isInCombatMode)
     case KEY_F1:
         gsound_play_sfx_file("ib1p1xx1");
         game_help();
+        break;
+    case KEY_F11:
+        // Experimental first-person presentation toggle.
+        first_person_toggle();
+        tile_refresh_display();
         break;
     case KEY_F2:
         gsound_set_master_volume(gsound_get_master_volume() - 2047);
