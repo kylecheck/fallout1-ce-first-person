@@ -812,8 +812,10 @@ int game_handle_input(int eventCode, bool isInCombatMode)
         game_help();
         break;
     case KEY_F11:
+    case KEY_0:
         // Experimental first-person presentation toggle.
         first_person_toggle();
+        display_print(first_person_is_enabled() ? "FIRST PERSON: ON" : "FIRST PERSON: OFF");
         tile_refresh_display();
         break;
     case KEY_F2:
