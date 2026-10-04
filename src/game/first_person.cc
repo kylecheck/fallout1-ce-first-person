@@ -29,6 +29,14 @@ struct FirstPersonWallSprite {
     double z;
 };
 
+struct FirstPersonFloorArt {
+    int fid;
+    Art* art;
+    ArtFrame* frame;
+    unsigned char* pixels;
+    CacheEntry* cacheEntry;
+};
+
 bool first_person_is_enabled()
 {
     return gFirstPersonEnabled;
@@ -90,6 +98,103 @@ void first_person_render()
     const double rightY = forwardX;
     const double focal = width * 0.70;
 
+    // v0.009: perspective-map Fallout's real floor tiles onto the ground.
+    //
+    // Rather than inventing a second floor coordinate system, convert each
+    // first-person ground sample back into the isometric screen coordinates
+    // that Fallout already uses. square_num/square_coord then tell us exactly
+    // which original floor FRM and which pixel belongs at that location.
+    int playerIsoX = 0;
+    int playerIsoY = 0;
+    tile_coord(obj_dude->tile, &playerIsoX, &playerIsoY, map_elevation);
+
+    std::vector<FirstPersonFloorArt> floorArts;
+    auto getFloorArt = [&floorArts](int fid) -> FirstPersonFloorArt* {
+        for (FirstPersonFloorArt& entry : floorArts) {
+            if (entry.fid == fid) {
+                return &entry;
+            }
+        }
+
+        CacheEntry* cacheEntry = nullptr;
+        Art* art = art_ptr_lock(fid, &cacheEntry);
+        if (art == nullptr) {
+            return nullptr;
+        }
+
+        ArtFrame* frame = frame_ptr(art, 0, 0);
+        unsigned char* pixels = art_frame_data(art, 0, 0);
+        if (frame == nullptr || pixels == nullptr || frame->width <= 0 || frame->height <= 0) {
+            art_ptr_unlock(cacheEntry);
+            return nullptr;
+        }
+
+        floorArts.push_back({ fid, art, frame, pixels, cacheEntry });
+        return &floorArts.back();
+    };
+
+    constexpr double kEyeHeight = 0.50;
+    constexpr double kIsoXFromWorldX = 27.712812921102035;
+    constexpr double kIsoYFromWorldX = -6.928203230275509;
+
+    for (int screenY = horizon + 1; screenY < height; screenY++) {
+        const double cameraZ = focal * kEyeHeight / (screenY - horizon);
+        if (cameraZ < kNearPlane || cameraZ > kFarPlane) {
+            continue;
+        }
+
+        for (int screenX = 0; screenX < width; screenX++) {
+            const double cameraX = (screenX - width * 0.5) * cameraZ / focal;
+
+            const double worldDx = rightX * cameraX + forwardX * cameraZ;
+            const double worldDy = rightY * cameraX + forwardY * cameraZ;
+
+            // These are the inverse of the hex-world basis used above:
+            // +1 world Y = (+16,+12) isometric pixels.
+            // +1 world X = (+27.713,-6.928) isometric pixels.
+            const int isoX = playerIsoX + static_cast<int>(std::lround(kIsoXFromWorldX * worldDx + 16.0 * worldDy));
+            const int isoY = playerIsoY + static_cast<int>(std::lround(kIsoYFromWorldX * worldDx + 12.0 * worldDy));
+
+            const int squareTile = square_num(isoX, isoY, map_elevation);
+            if (squareTile < 0 || squareTile >= SQUARE_GRID_SIZE) {
+                continue;
+            }
+
+            const int floorData = square[map_elevation]->field_0[squareTile];
+            const int frmId = floorData & 0xFFF;
+            const int fid = art_id(OBJ_TYPE_TILE, frmId, 0, 0, 0);
+
+            int floorIsoX = 0;
+            int floorIsoY = 0;
+            if (square_coord(squareTile, &floorIsoX, &floorIsoY, map_elevation) != 0) {
+                continue;
+            }
+
+            FirstPersonFloorArt* floorArt = getFloorArt(fid);
+            if (floorArt == nullptr) {
+                continue;
+            }
+
+            const int sourceX = isoX - floorIsoX;
+            const int sourceY = isoY - floorIsoY;
+            if (sourceX < 0 || sourceX >= floorArt->frame->width
+                || sourceY < 0 || sourceY >= floorArt->frame->height) {
+                continue;
+            }
+
+            const unsigned char pixel = floorArt->pixels[sourceY * floorArt->frame->width + sourceX];
+            if (pixel != 0) {
+                buffer[screenY * width + screenX] = pixel;
+            }
+        }
+    }
+
+    for (FirstPersonFloorArt& entry : floorArts) {
+        art_ptr_unlock(entry.cacheEntry);
+    }
+
+    // Retain sparse depth guides for this build. They make it easy to see
+    // whether the newly projected floor agrees with our established geometry.
     for (int depth = 1; depth <= 8; depth++) {
         const int y = horizon + static_cast<int>((height - horizon) * (1.0 - 1.0 / (1.0 + depth * 0.55)));
         draw_line(buffer, width, 0, y, width - 1, y, gridColor);
