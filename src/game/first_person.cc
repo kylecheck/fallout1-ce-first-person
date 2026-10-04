@@ -25,6 +25,8 @@ static bool gFirstPersonEnabled = false;
 struct FirstPersonWallSprite {
     int fid;
     int direction;
+    double worldX;
+    double worldY;
     double x;
     double z;
 };
@@ -308,7 +310,7 @@ void first_person_render()
         }
 
         const int direction = ((wall->rotation % ROTATION_COUNT) + ROTATION_COUNT) % ROTATION_COUNT;
-        walls.push_back({ wall->fid, direction, cameraX, cameraZ });
+        walls.push_back({ wall->fid, direction, wallWorldX, wallWorldY, cameraX, cameraZ });
     }
 
     // Fallout's normal renderer is painter based too. Drawing distant sprites
@@ -317,6 +319,13 @@ void first_person_render()
         return a.z > b.z;
     });
 
+    // v0.013: reconstruct walls as fixed world-space segments instead of
+    // camera-facing cards. Fallout wall art is authored on the isometric
+    // screen, so infer the structural axis from the decoded FRM footprint:
+    // narrow pieces with signed frame X offsets identify the two diagonal
+    // wall families; centered/wider pieces use their bottom opaque footprint
+    // to choose the closest matching hex axis. This is deliberately geometric
+    // first -- the original FRM is then sampled across the resulting plane.
     for (const FirstPersonWallSprite& wall : walls) {
         CacheEntry* cacheEntry = nullptr;
         Art* art = art_ptr_lock(wall.fid, &cacheEntry);
@@ -331,34 +340,130 @@ void first_person_render()
             continue;
         }
 
-        // The FRM width is useful structural information: common 16/32/48 px
-        // Fallout wall pieces become half/full/one-and-a-half hex wide here.
-        // Height is normalized because the original FRM includes isometric
-        // projection rather than a front-facing physical measurement.
-        const double worldWidth = std::max(0.35, frame->width / 32.0);
+        // Estimate the visible footprint from the lowest rows containing art.
+        int minBottomX = frame->width;
+        int maxBottomX = -1;
+        const int footprintRows = std::min(18, frame->height);
+        for (int sy = frame->height - footprintRows; sy < frame->height; sy++) {
+            for (int sx = 0; sx < frame->width; sx++) {
+                if (pixels[sy * frame->width + sx] != 0) {
+                    minBottomX = std::min(minBottomX, sx);
+                    maxBottomX = std::max(maxBottomX, sx);
+                }
+            }
+        }
+
+        // Fallout's common wall families expose useful anchoring in the FRM
+        // frame offset. Signed offsets separate the two diagonal axes. Centered
+        // pieces default to the third hex axis; the bottom-footprint bias helps
+        // corners and wider special pieces choose a diagonal when appropriate.
+        int axis = 0;
+        if (frame->x > 3) {
+            axis = 1;
+        } else if (frame->x < -3) {
+            axis = 2;
+        } else if (maxBottomX >= minBottomX) {
+            const double footprintCenter = (minBottomX + maxBottomX) * 0.5;
+            const double bias = footprintCenter - (frame->width - 1) * 0.5;
+            if (bias > 4.0) {
+                axis = 1;
+            } else if (bias < -4.0) {
+                axis = 2;
+            }
+        }
+
+        constexpr double kAxisAngles[3] = { 0.0, kPi / 3.0, -kPi / 3.0 };
+        const double axisX = std::cos(kAxisAngles[axis]);
+        const double axisY = std::sin(kAxisAngles[axis]);
+        const double worldWidth = std::clamp(frame->width / 32.0, 0.50, 1.50);
         constexpr double kWallHeight = 1.65;
-        const int projectedWidth = std::max(1, static_cast<int>(focal * worldWidth / wall.z));
-        const int projectedHeight = std::max(1, static_cast<int>(focal * kWallHeight / wall.z));
-        const int centerX = width / 2 + static_cast<int>(wall.x * focal / wall.z);
-        const int bottom = horizon + std::clamp(static_cast<int>(focal * 0.50 / wall.z), 0, height - horizon - 1);
-        const int left = centerX - projectedWidth / 2;
-        const int top = bottom - projectedHeight;
 
-        for (int screenY = std::max(0, top); screenY <= std::min(height - 1, bottom); screenY++) {
-            const int sourceY = std::clamp((screenY - top) * frame->height / projectedHeight, 0, frame->height - 1);
-            for (int screenX = std::max(0, left); screenX < std::min(width, left + projectedWidth); screenX++) {
-                const int sourceX = std::clamp((screenX - left) * frame->width / projectedWidth, 0, frame->width - 1);
+        const double endpointAX = wall.worldX - axisX * worldWidth * 0.5;
+        const double endpointAY = wall.worldY - axisY * worldWidth * 0.5;
+        const double endpointBX = wall.worldX + axisX * worldWidth * 0.5;
+        const double endpointBY = wall.worldY + axisY * worldWidth * 0.5;
+
+        const double adx = endpointAX - playerWorldX;
+        const double ady = endpointAY - playerWorldY;
+        const double bdx = endpointBX - playerWorldX;
+        const double bdy = endpointBY - playerWorldY;
+        double ax = adx * rightX + ady * rightY;
+        double az = adx * forwardX + ady * forwardY;
+        double bx = bdx * rightX + bdy * rightY;
+        double bz = bdx * forwardX + bdy * forwardY;
+
+        // Clip the segment against the near plane so walking right up to a wall
+        // cannot explode its projection or drop the entire piece.
+        if (az <= kNearPlane && bz <= kNearPlane) {
+            art_ptr_unlock(cacheEntry);
+            continue;
+        }
+        if (az <= kNearPlane) {
+            const double t = (kNearPlane - az) / (bz - az);
+            ax += (bx - ax) * t;
+            az = kNearPlane;
+        } else if (bz <= kNearPlane) {
+            const double t = (kNearPlane - bz) / (az - bz);
+            bx += (ax - bx) * t;
+            bz = kNearPlane;
+        }
+
+        const int screenAX = width / 2 + static_cast<int>(ax * focal / az);
+        const int screenBX = width / 2 + static_cast<int>(bx * focal / bz);
+        const int bottomAY = horizon + static_cast<int>(focal * kEyeHeight / az);
+        const int bottomBY = horizon + static_cast<int>(focal * kEyeHeight / bz);
+        const int topAY = bottomAY - static_cast<int>(focal * kWallHeight / az);
+        const int topBY = bottomBY - static_cast<int>(focal * kWallHeight / bz);
+
+        const int minX = std::max(0, std::min(screenAX, screenBX));
+        const int maxX = std::min(width - 1, std::max(screenAX, screenBX));
+        if (minX > maxX) {
+            art_ptr_unlock(cacheEntry);
+            continue;
+        }
+
+        const double screenSpan = static_cast<double>(screenBX - screenAX);
+        if (std::abs(screenSpan) < 1.0) {
+            art_ptr_unlock(cacheEntry);
+            continue;
+        }
+
+        // Perspective-correct interpolation along the wall. 1/z is linear in
+        // screen space, so it supplies both depth testing and texture position.
+        const double invAz = 1.0 / az;
+        const double invBz = 1.0 / bz;
+        for (int screenX = minX; screenX <= maxX; screenX++) {
+            const double s = (screenX - screenAX) / screenSpan;
+            if (s < 0.0 || s > 1.0) {
+                continue;
+            }
+
+            const double invZ = invAz + (invBz - invAz) * s;
+            if (invZ <= 0.0) {
+                continue;
+            }
+            const double z = 1.0 / invZ;
+            const double perspectiveT = ((1.0 - s) * invAz) / invZ;
+            const double worldT = 1.0 - perspectiveT;
+            const int bottom = static_cast<int>(bottomAY + (bottomBY - bottomAY) * s);
+            const int top = static_cast<int>(topAY + (topBY - topAY) * s);
+            const int columnHeight = bottom - top;
+            if (columnHeight <= 0) {
+                continue;
+            }
+
+            const int sourceX = std::clamp(static_cast<int>(worldT * (frame->width - 1)), 0, frame->width - 1);
+            for (int screenY = std::max(0, top); screenY <= std::min(height - 1, bottom); screenY++) {
+                const int sourceY = std::clamp((screenY - top) * frame->height / columnHeight, 0, frame->height - 1);
                 const unsigned char pixel = pixels[sourceY * frame->width + sourceX];
+                if (pixel == 0) {
+                    continue;
+                }
 
-                // Palette index 0 is transparent in Fallout FRM artwork. Copy
-                // every other index directly: our target is the same 8-bit
-                // framebuffer/palette used by the original renderer.
-                if (pixel != 0) {
-                    const int destination = screenY * width + screenX;
-                    if (wall.z < depthBuffer[destination]) {
-                        buffer[destination] = pixel;
-                        depthBuffer[destination] = wall.z;
-                    }
+                const int destination = screenY * width + screenX;
+                if (z < depthBuffer[destination]) {
+                    buffer[destination] = pixel;
+                    depthBuffer[destination] = z;
                 }
             }
         }
