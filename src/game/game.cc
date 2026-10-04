@@ -815,6 +815,11 @@ int game_handle_input(int eventCode, bool isInCombatMode)
     case KEY_0: {
         // Experimental first-person presentation toggle.
         first_person_toggle();
+        if (first_person_is_enabled()) {
+            gmouse_disable_scrolling();
+        } else {
+            gmouse_enable_scrolling();
+        }
         char firstPersonOn[] = "FIRST PERSON: ON";
         char firstPersonOff[] = "FIRST PERSON: OFF";
         display_print(first_person_is_enabled() ? firstPersonOn : firstPersonOff);
