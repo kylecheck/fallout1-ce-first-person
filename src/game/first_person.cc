@@ -4,6 +4,8 @@
 #include <cmath>
 
 #include "game/map.h"
+#include "game/object_types.h"
+#include "game/tile.h"
 #include "game/object.h"
 #include "plib/color/color.h"
 #include "plib/gnw/gnw.h"
@@ -50,67 +52,93 @@ void first_person_render()
         return;
     }
 
-    // Prototype v0.001: prove that CE can substitute a perspective viewport
-    // while the original Fallout map/simulation continues running underneath.
+    // v0.002: the camera is now anchored to the player's real Fallout hex.
+    // Nearby OBJ_TYPE_WALL objects from the loaded map are projected into a
+    // simple perspective view. Art/texturing comes later.
     const int sky = colorTable[0];
     const int ground = colorTable[10570];
-    const int nearLine = colorTable[31744];
-    const int farLine = colorTable[992];
+    const int wallColor = colorTable[31744];
+    const int gridColor = colorTable[992];
+    const int crosshairColor = colorTable[31744];
 
     const int horizon = height * 43 / 100;
     buf_fill(buffer, width, horizon, width, sky);
     buf_fill(buffer + horizon * width, width, height - horizon, width, ground);
 
-    // Fallout has six facing directions. Offset the vanishing point slightly
-    // with the player's rotation so turning is immediately visible.
-    const int rotation = ((obj_dude->rotation % 6) + 6) % 6;
-    const double angle = rotation * (3.14159265358979323846 / 3.0);
-    const int vanishX = width / 2 + static_cast<int>(std::sin(angle) * width * 0.08);
-    const int vanishY = horizon;
-
-    // Perspective floor grid. This is deliberately geometry-only for the first
-    // milestone; later revisions will derive floor/wall surfaces from MAP data.
-    const int depthBands = 9;
-    int previousY = height - 1;
-    for (int depth = 1; depth <= depthBands; depth++) {
-        const double t = static_cast<double>(depth) / depthBands;
-        const double perspective = t * t;
-        const int y = height - 1 - static_cast<int>((height - 1 - horizon) * perspective);
-        const int halfWidth = static_cast<int>((width * 0.62) * (1.0 - perspective) + 8.0);
-        const int color = depth < 5 ? nearLine : farLine;
-
-        draw_line(buffer, width,
-            std::max(0, vanishX - halfWidth), y,
-            std::min(width - 1, vanishX + halfWidth), y,
-            color);
-        previousY = y;
+    int playerX;
+    int playerY;
+    if (tile_coord(obj_dude->tile, &playerX, &playerY, map_elevation) != 0) {
+        return;
     }
 
-    // Radial lines converge at the vanishing point and make the hex-world
-    // orientation obvious without yet depending on Fallout art assets.
-    for (int lane = -6; lane <= 6; lane++) {
-        const int bottomX = width / 2 + lane * width / 10;
-        draw_line(buffer, width,
-            std::clamp(bottomX, 0, width - 1), height - 1,
-            vanishX, vanishY,
-            lane == 0 ? nearLine : farLine);
+    const int rotation = ((obj_dude->rotation % ROTATION_COUNT) + ROTATION_COUNT) % ROTATION_COUNT;
+    const double yaw = rotation * (3.14159265358979323846 / 3.0);
+    // tile_coord is screen/isometric space. This is only an approximate world
+    // basis for v0.002, but it preserves real map-relative wall placement.
+    const double forwardX = std::sin(yaw);
+    const double forwardY = -std::cos(yaw);
+    const double rightX = std::cos(yaw);
+    const double rightY = std::sin(yaw);
+    const double focal = width * 0.70;
+
+    // A few depth guides make it easier to judge whether real wall positions
+    // agree with the map while we validate the projection.
+    for (int depth = 1; depth <= 8; depth++) {
+        const int y = horizon + static_cast<int>((height - horizon) * (1.0 - 1.0 / (1.0 + depth * 0.55)));
+        draw_line(buffer, width, 0, y, width - 1, y, gridColor);
     }
 
-    // Temporary "wall" blocks ahead of the player. These give us an immediate
-    // perspective/camera sanity check before MAP scenery is projected.
-    const int wallBottom = horizon + (height - horizon) * 3 / 5;
-    const int wallTop = horizon - height / 7;
-    const int wallHalf = std::max(24, width / 10);
-    drawQuad(buffer, width,
-        vanishX - wallHalf, wallBottom,
-        vanishX + wallHalf, wallBottom,
-        vanishX + wallHalf * 2 / 3, wallTop,
-        vanishX - wallHalf * 2 / 3, wallTop,
-        nearLine);
+    for (Object* object = obj_find_first_at(map_elevation);
+         object != nullptr;
+         object = obj_find_next_at()) {
+        if (object == obj_dude || object->tile < 0 || FID_TYPE(object->fid) != OBJ_TYPE_WALL) {
+            continue;
+        }
 
-    // Crosshair.
-    draw_line(buffer, width, width / 2 - 7, height / 2, width / 2 + 7, height / 2, nearLine);
-    draw_line(buffer, width, width / 2, height / 2 - 7, width / 2, height / 2 + 7, nearLine);
+        // Keep the prototype local so distant map objects do not clutter the
+        // view or waste time.
+        const int hexDistance = tile_dist(obj_dude->tile, object->tile);
+        if (hexDistance > 18) {
+            continue;
+        }
+
+        int wallX;
+        int wallY;
+        if (tile_coord(object->tile, &wallX, &wallY, map_elevation) != 0) {
+            continue;
+        }
+
+        // Normalize Fallout's isometric screen deltas into a rough 2D world
+        // plane before rotating them into camera space.
+        const double dx = (wallX - playerX) / 32.0;
+        const double dy = (wallY - playerY) / 12.0;
+        const double cameraX = dx * rightX + dy * rightY;
+        const double cameraZ = dx * forwardX + dy * forwardY;
+
+        if (cameraZ <= 0.35 || cameraZ > 36.0) {
+            continue;
+        }
+
+        const int centerX = width / 2 + static_cast<int>(cameraX * focal / cameraZ);
+        const int halfWidth = std::clamp(static_cast<int>(focal * 0.42 / cameraZ), 2, width / 3);
+        const int wallHeight = std::clamp(static_cast<int>(focal * 1.25 / cameraZ), 6, height);
+        const int bottom = horizon + std::clamp(static_cast<int>(focal * 0.50 / cameraZ), 0, height - horizon - 1);
+        const int top = bottom - wallHeight;
+
+        if (centerX + halfWidth < 0 || centerX - halfWidth >= width || bottom < 0 || top >= height) {
+            continue;
+        }
+
+        drawQuad(buffer, width,
+            std::clamp(centerX - halfWidth, 0, width - 1), std::clamp(bottom, 0, height - 1),
+            std::clamp(centerX + halfWidth, 0, width - 1), std::clamp(bottom, 0, height - 1),
+            std::clamp(centerX + halfWidth, 0, width - 1), std::clamp(top, 0, height - 1),
+            std::clamp(centerX - halfWidth, 0, width - 1), std::clamp(top, 0, height - 1),
+            wallColor);
+    }
+
+    draw_line(buffer, width, width / 2 - 7, height / 2, width / 2 + 7, height / 2, crosshairColor);
+    draw_line(buffer, width, width / 2, height / 2 - 7, width / 2, height / 2 + 7, crosshairColor);
 }
 
 } // namespace fallout
