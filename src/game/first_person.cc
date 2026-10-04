@@ -11,7 +11,8 @@
 
 namespace fallout {
 
-static bool gFirstPersonEnabled = false;
+// Prototype test: start enabled so Steam Deck testing does not depend on keyboard mappings.
+static bool gFirstPersonEnabled = true;
 
 static void drawQuad(unsigned char* buffer, int pitch,
     int x0, int y0, int x1, int y1, int x2, int y2, int x3, int y3, int color)
