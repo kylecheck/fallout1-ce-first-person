@@ -209,7 +209,10 @@ void first_person_render()
 
         // Six corners around the selected hex center in our world coordinate
         // system. Project each ground point with the same camera used above.
-        constexpr double kHexRadius = 0.56;
+        // Keep the marker comfortably inside the destination hex. The previous
+        // radius let the near corners cross the camera near-plane when the
+        // target was only one hex away, which made this diagnostic fragile.
+        constexpr double kHexRadius = 0.32;
         int hexX[6];
         int hexY[6];
         bool hexVisible = centerCameraZ > kNearPlane;
