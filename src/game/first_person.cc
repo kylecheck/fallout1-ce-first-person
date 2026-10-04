@@ -2,8 +2,11 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <set>
 #include <vector>
 
+#include "game/art.h"
 #include "game/map.h"
 #include "game/object_types.h"
 #include "game/tile.h"
@@ -15,6 +18,11 @@
 namespace fallout {
 
 static bool gFirstPersonEnabled = false;
+
+// v0.006 diagnostic: report each distinct wall-art/rotation combination once.
+// This lets us derive Fallout's real wall orientation rules from the user's
+// actual map data instead of continuing to infer topology from neighboring hexes.
+static std::set<long long> gReportedWallVariants;
 
 struct FirstPersonWall {
     double x0;
@@ -103,6 +111,27 @@ void first_person_render()
             && FID_TYPE(wall->fid) == OBJ_TYPE_WALL
             && tile_dist(obj_dude->tile, wall->tile) <= 18) {
             wallTiles.push_back(wall->tile);
+
+            const int frmId = wall->fid & 0xFFF;
+            const long long variantKey =
+                (static_cast<long long>(wall->fid) << 8)
+                ^ (static_cast<long long>(wall->rotation & 0xFF));
+            if (gReportedWallVariants.insert(variantKey).second) {
+                char artName[64] = { 0 };
+                if (art_get_base_name(OBJ_TYPE_WALL, frmId, artName) == -1) {
+                    std::snprintf(artName, sizeof(artName), "<unknown>");
+                }
+
+                std::printf("FPWALL tile=%d pid=0x%08X fid=0x%08X frm=%d rot=%d art=%s flags=0x%08X\\n",
+                    wall->tile,
+                    static_cast<unsigned int>(wall->pid),
+                    static_cast<unsigned int>(wall->fid),
+                    frmId,
+                    wall->rotation,
+                    artName,
+                    static_cast<unsigned int>(wall->flags));
+                std::fflush(stdout);
+            }
         }
     }
 
