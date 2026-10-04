@@ -428,14 +428,6 @@ void game_exit()
 // 0x43B748
 int game_handle_input(int eventCode, bool isInCombatMode)
 {
-    // TEMP v0.003 input probe: show the logical input code produced by
-    // Steam Input / keyboard so we can bind a Deck face button reliably.
-    if (eventCode >= 0) {
-        char inputProbe[64];
-        snprintf(inputProbe, sizeof(inputProbe), "INPUT CODE: %d", eventCode);
-        display_print(inputProbe);
-    }
-
     // NOTE: Uninline.
     if (game_state() == GAME_STATE_5) {
         dialogue_system_enter();
@@ -820,7 +812,8 @@ int game_handle_input(int eventCode, bool isInCombatMode)
         game_help();
         break;
     case KEY_F11:
-    case KEY_0: {
+    case KEY_0:
+    case 337: { // Steam Deck R5 via the user's current Steam Input layout.
         // Experimental first-person presentation toggle.
         first_person_toggle();
         if (first_person_is_enabled()) {
