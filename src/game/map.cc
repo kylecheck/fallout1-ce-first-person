@@ -11,6 +11,7 @@
 #include "game/critter.h"
 #include "game/cycle.h"
 #include "game/editor.h"
+#include "game/first_person.h"
 #include "game/game.h"
 #include "game/gconfig.h"
 #include "game/gmouse.h"
