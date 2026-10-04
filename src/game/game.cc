@@ -812,9 +812,7 @@ int game_handle_input(int eventCode, bool isInCombatMode)
         game_help();
         break;
     case KEY_F11:
-    case KEY_0:
-    case KEY_LOWERCASE_P:
-    case KEY_UPPERCASE_P: {
+    case KEY_0: {
         // Experimental first-person presentation toggle.
         first_person_toggle();
         if (first_person_is_enabled()) {
