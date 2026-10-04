@@ -193,6 +193,61 @@ void first_person_render()
         art_ptr_unlock(entry.cacheEntry);
     }
 
+    // v0.010: show the exact Fallout hex selected by "move forward".
+    // This uses the same destination calculation as the first-person movement
+    // controls, then projects that hex back onto the perspective floor.
+    const int moveTargetTile = tile_num_in_direction(obj_dude->tile, rotation, 1);
+    if (moveTargetTile >= 0) {
+        double targetWorldX;
+        double targetWorldY;
+        tileToWorld(moveTargetTile, &targetWorldX, &targetWorldY);
+
+        const double targetDx = targetWorldX - playerWorldX;
+        const double targetDy = targetWorldY - playerWorldY;
+        const double centerCameraX = targetDx * rightX + targetDy * rightY;
+        const double centerCameraZ = targetDx * forwardX + targetDy * forwardY;
+
+        // Six corners around the selected hex center in our world coordinate
+        // system. Project each ground point with the same camera used above.
+        constexpr double kHexRadius = 0.56;
+        int hexX[6];
+        int hexY[6];
+        bool hexVisible = centerCameraZ > kNearPlane;
+
+        for (int corner = 0; corner < 6 && hexVisible; corner++) {
+            const double angle = corner * kPi / 3.0;
+            const double worldX = targetWorldX + std::cos(angle) * kHexRadius;
+            const double worldY = targetWorldY + std::sin(angle) * kHexRadius;
+            const double dx = worldX - playerWorldX;
+            const double dy = worldY - playerWorldY;
+            const double cameraX = dx * rightX + dy * rightY;
+            const double cameraZ = dx * forwardX + dy * forwardY;
+
+            if (cameraZ <= kNearPlane) {
+                hexVisible = false;
+                break;
+            }
+
+            hexX[corner] = width / 2 + static_cast<int>(cameraX * focal / cameraZ);
+            hexY[corner] = horizon + static_cast<int>(focal * kEyeHeight / cameraZ);
+        }
+
+        if (hexVisible) {
+            const int highlightColor = colorTable[31744];
+            for (int corner = 0; corner < 6; corner++) {
+                const int next = (corner + 1) % 6;
+                draw_line(buffer, width, hexX[corner], hexY[corner], hexX[next], hexY[next], highlightColor);
+            }
+
+            // A small center marker makes the destination unmistakable even
+            // when perspective compresses the far edge of the hex.
+            const int centerX = width / 2 + static_cast<int>(centerCameraX * focal / centerCameraZ);
+            const int centerY = horizon + static_cast<int>(focal * kEyeHeight / centerCameraZ);
+            draw_line(buffer, width, centerX - 3, centerY, centerX + 3, centerY, highlightColor);
+            draw_line(buffer, width, centerX, centerY - 3, centerX, centerY + 3, highlightColor);
+        }
+    }
+
     // Retain sparse depth guides for this build. They make it easy to see
     // whether the newly projected floor agrees with our established geometry.
     for (int depth = 1; depth <= 8; depth++) {
