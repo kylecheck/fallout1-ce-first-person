@@ -615,3 +615,18 @@ Vertical look now uses asymmetric pitch limits: about +18 degrees upward and
 so the tighter upward cap avoids exposing mostly empty/black space, while the
 deeper downward range lets the player inspect essentially the full ground plane
 and use the trackpad for precise nearby hex/object targeting.
+
+
+## Full-screen first-person presentation
+
+First-person mode now renders into its own full-screen GNW window rather than
+being confined to Fallout's original map viewport above the 100-pixel interface
+bar. Entering first person hides the native interface bar but leaves the
+underlying Fallout interface systems enabled; inventory, Pip-Boy, dialogue,
+elevator panels, and other native modal windows can still open above the
+first-person view.
+
+The first-person mouse/pick path now uses that full-screen presentation window,
+including the lower portion of the screen that previously belonged to the
+interface bar. Leaving first person restores the interface bar when it was
+visible before entering first-person mode.
