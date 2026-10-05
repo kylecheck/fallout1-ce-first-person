@@ -630,3 +630,16 @@ The first-person mouse/pick path now uses that full-screen presentation window,
 including the lower portion of the screen that previously belonged to the
 interface bar. Leaving first person restores the interface bar when it was
 visible before entering first-person mode.
+
+
+## Free-look input ownership fix
+
+Right-stick free look is now polled from the gameplay/background update path
+instead of from the renderer itself. This prevents camera input from freezing
+after inspect/combat cursor-mode transitions when no unrelated map redraw is
+pending. A successful controller look update explicitly requests a map refresh.
+
+First-person mode also suppresses Fallout's native edge-scrolling cursor logic.
+The full-screen overlay owns the playfield while active, so pushing the cursor
+toward an edge should no longer turn it into the legacy map-scroll arrows or
+let that hidden isometric interaction layer interfere with free look.
