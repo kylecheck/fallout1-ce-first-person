@@ -762,9 +762,19 @@ void gmouse_bk_process()
 
         char formattedActionPoints[8];
         int color;
-        const int destination = first_person_is_enabled()
-            ? first_person_target_tile(mouseX, mouseY)
-            : obj_mouse_flat->tile;
+        int destination;
+        if (first_person_is_enabled()) {
+            Rect viewRect;
+            if (win_get_rect(first_person_window(), &viewRect) == 0) {
+                const int centerX = viewRect.ulx + rectGetWidth(&viewRect) / 2;
+                const int centerY = viewRect.uly + rectGetHeight(&viewRect) / 2;
+                destination = first_person_target_tile(centerX, centerY);
+            } else {
+                destination = -1;
+            }
+        } else {
+            destination = obj_mouse_flat->tile;
+        }
         int v6 = destination == -1 ? 0 : make_path(obj_dude, obj_dude->tile, destination, NULL, 1);
         if (v6) {
             if (!isInCombat()) {
@@ -1580,18 +1590,15 @@ Object* object_under_mouse(int objectType, bool a2, int elevation)
     mouse_get_position(&mouseX, &mouseY);
 
     if (first_person_is_enabled()) {
-        // Interactions still follow the real mouse/trackpad pointer, but combat
-        // aiming is camera-centered so right-stick look and the visible reticle
-        // select the same target in first person.
-        int pickX = mouseX;
-        int pickY = mouseY;
-        if (gmouse_3d_current_mode == GAME_MOUSE_MODE_CROSSHAIR) {
-            Rect viewRect;
-            if (win_get_rect(first_person_window(), &viewRect) == 0) {
-                pickX = viewRect.ulx + rectGetWidth(&viewRect) / 2;
-                pickY = viewRect.uly + rectGetHeight(&viewRect) / 2;
-            }
+        // First-person world interaction is camera-centered in every world mode.
+        // This gives movement, inspect/use, and combat one authoritative reticle
+        // instead of letting a hidden/free mouse pointer disagree with the view.
+        Rect viewRect;
+        if (win_get_rect(first_person_window(), &viewRect) != 0) {
+            return nullptr;
         }
+        const int pickX = viewRect.ulx + rectGetWidth(&viewRect) / 2;
+        const int pickY = viewRect.uly + rectGetHeight(&viewRect) / 2;
 
         if (win_get_top_win(pickX, pickY) != first_person_window()) {
             return nullptr;
