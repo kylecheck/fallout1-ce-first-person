@@ -536,3 +536,26 @@ switches and enemies across maps without introducing location-specific
 interaction code. Visual presentation can still be specialized later by
 semantic scenery class, but gameplay authority stays in Fallout's existing
 systems.
+
+
+## Interaction/combat foundation validation
+
+The October 5 Steam Deck test validated the generic first-person interaction path
+across multiple native object types:
+
+- scripted elevator scenery could be examined and opened its native elevator UI
+- critters could be acquired from first person and entered Fallout's normal
+  combat/weapon checks (including the native no-ammo result)
+- terminal scenery returned its native examine text
+- the close-range billboard interaction footprint remained usable
+- object targeting remained stable at longer viewing distances
+
+The 24-step presentation heading (15-degree increments) was also validated in
+the same vault rooms. It substantially reduces the six-direction "bladed" view
+without changing Fallout's six-direction hex movement, collision, pathing, or
+animation authority.
+
+This marks the generic picking/interaction/combat-target selection layer as a
+usable foundation. Remaining combat work is primarily feedback/presentation
+(AP, attack state, selected target, weapon state) rather than replacing native
+combat semantics.
