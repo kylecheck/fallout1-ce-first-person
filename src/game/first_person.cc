@@ -194,6 +194,18 @@ struct FirstPersonWallMaterial {
 };
 static std::vector<FirstPersonWallMaterial> gFirstPersonWallMaterials;
 
+static std::vector<double> gFirstPersonDepthBuffer;
+static std::vector<double> gFirstPersonInteractionDepth;
+
+struct FirstPersonRenderedBounds {
+    Object* object;
+    int id;
+    int left;
+    int top;
+    int right;
+    int bottom;
+};
+
 struct FirstPersonDoorSprite {
     Object* object;
     int fid;
@@ -856,9 +868,18 @@ void first_person_render()
     gPickTile = obj_dude->tile;
     gPickRotation = gFirstPersonCameraRevision;
     gPickElevation = map_elevation;
-    gFirstPersonPicks.assign(static_cast<size_t>(width) * height, { nullptr, -1 });
-    gFirstPersonInteractionPicks.assign(
-        static_cast<size_t>(width) * height, { nullptr, -1 });
+    const size_t pixelCount = static_cast<size_t>(width) * height;
+    if (gFirstPersonPicks.size() != pixelCount) {
+        gFirstPersonPicks.resize(pixelCount);
+        gFirstPersonInteractionPicks.resize(pixelCount);
+        gFirstPersonDepthBuffer.resize(pixelCount);
+        gFirstPersonInteractionDepth.resize(pixelCount);
+    }
+    std::fill(gFirstPersonPicks.begin(), gFirstPersonPicks.end(), FirstPersonPick { nullptr, -1 });
+    std::fill(
+        gFirstPersonInteractionPicks.begin(),
+        gFirstPersonInteractionPicks.end(),
+        FirstPersonPick { nullptr, -1 });
 
     const int sky = colorTable[0];
     const int ground = colorTable[10570];
@@ -902,9 +923,16 @@ void first_person_render()
     // project sprites into perspective that is no longer enough. Keeping depth
     // per framebuffer pixel gives later wall geometry a proper foundation and
     // stops distant cardboard sprites from drawing through nearer ones.
-    std::vector<double> depthBuffer(static_cast<size_t>(width) * height, kFarPlane + 1.0);
-    std::vector<double> interactionDepth(
-        static_cast<size_t>(width) * height, kFarPlane + 1.0);
+    std::fill(
+        gFirstPersonDepthBuffer.begin(),
+        gFirstPersonDepthBuffer.end(),
+        kFarPlane + 1.0);
+    std::fill(
+        gFirstPersonInteractionDepth.begin(),
+        gFirstPersonInteractionDepth.end(),
+        kFarPlane + 1.0);
+    std::vector<double>& depthBuffer = gFirstPersonDepthBuffer;
+    std::vector<double>& interactionDepth = gFirstPersonInteractionDepth;
 
     // v0.009: perspective-map Fallout's real floor tiles onto the ground.
     //
@@ -2008,6 +2036,9 @@ void first_person_render()
         return a.z > b.z;
     });
 
+    std::vector<FirstPersonRenderedBounds> renderedObjectBounds;
+    renderedObjectBounds.reserve(objectSprites.size());
+
     for (const FirstPersonObjectSprite& object : objectSprites) {
         CacheEntry* cacheEntry = nullptr;
         Art* art = art_ptr_lock(object.fid, &cacheEntry);
@@ -2071,6 +2102,14 @@ void first_person_render()
         const int bottom = horizon + static_cast<int>(focal * kEyeHeight / object.z);
         const int left = centerX - projectedWidth / 2;
         const int top = bottom - projectedHeight;
+        renderedObjectBounds.push_back({
+            object.object,
+            object.object->id,
+            std::max(0, left),
+            std::max(0, top),
+            std::min(width - 1, left + projectedWidth - 1),
+            std::min(height - 1, bottom),
+        });
 
         for (int screenY = std::max(0, top); screenY <= std::min(height - 1, bottom); screenY++) {
             const int sourceY = std::clamp((screenY - top) * frame->height / projectedHeight, 0, frame->height - 1);
@@ -2109,8 +2148,8 @@ void first_person_render()
     Object* firstPersonHoverObject = nullptr;
     const bool firstPersonCombatAim =
         gmouse_3d_get_mode() == GAME_MOUSE_MODE_CROSSHAIR;
-    const int hoverX = firstPersonCombatAim ? width / 2 : mouseX;
-    const int hoverY = firstPersonCombatAim ? height / 2 : mouseY;
+    const int hoverX = width / 2;
+    const int hoverY = height / 2;
 
     // Native Fallout outlines are painted by the isometric world renderer, so
     // they are not visible when the first-person scene replaces that renderer.
@@ -2163,16 +2202,13 @@ void first_person_render()
             int minPickY = height;
             int maxPickX = -1;
             int maxPickY = -1;
-
-            for (int py = 0; py < height; py++) {
-                for (int px = 0; px < width; px++) {
-                    const FirstPersonPick pick = gFirstPersonPicks[py * width + px];
-                    if (pick.object == hoverPick.object && pick.id == hoverPick.id) {
-                        minPickX = std::min(minPickX, px);
-                        minPickY = std::min(minPickY, py);
-                        maxPickX = std::max(maxPickX, px);
-                        maxPickY = std::max(maxPickY, py);
-                    }
+            for (const FirstPersonRenderedBounds& bounds : renderedObjectBounds) {
+                if (bounds.object == hoverPick.object && bounds.id == hoverPick.id) {
+                    minPickX = bounds.left;
+                    minPickY = bounds.top;
+                    maxPickX = bounds.right;
+                    maxPickY = bounds.bottom;
+                    break;
                 }
             }
 
@@ -2750,29 +2786,9 @@ void first_person_render()
         text_font(oldFont);
     }
 
-    // Draw an explicit first-person pointer after our scene has covered the
-    // normal Fallout map cursor. This is intentionally simple and high contrast
-    // for the prototype; the important part is that its tip and highlighted
-    // engine hex now agree.
-    if (mouseX >= 0 && mouseX < width && mouseY >= 0 && mouseY < height) {
-        const int pointerColor = colorTable[31744];
-        const int pointerShadow = colorTable[0];
-        for (int i = 0; i <= 9; i++) {
-            if (mouseY + i < height) {
-                buffer[(mouseY + i) * width + mouseX] = pointerShadow;
-                if (mouseX + 1 < width) {
-                    buffer[(mouseY + i) * width + mouseX + 1] = pointerColor;
-                }
-            }
-            if (mouseX + i < width) {
-                buffer[mouseY * width + mouseX + i] = pointerShadow;
-                if (mouseY + 1 < height) {
-                    buffer[(mouseY + 1) * width + mouseX + i] = pointerColor;
-                }
-            }
-        }
-    }
-
+    // First-person world interaction is camera-centered. Do not draw a second
+    // free mouse pointer over the scene; native modal windows still own the
+    // real pointer when they are shown above the first-person overlay.
     draw_line(buffer, width, width / 2 - 7, height / 2, width / 2 + 7, height / 2, crosshairColor);
     draw_line(buffer, width, width / 2, height / 2 - 7, width / 2, height / 2 + 7, crosshairColor);
 
