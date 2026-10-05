@@ -720,3 +720,12 @@ The target brackets also switch to the same green treatment in attack mode, and 
 The first-person overlay now presents the currently active native weapon using that item's original Fallout inventory FRM from the user's local game data. Transparent bounds are cropped, the art is nearest-neighbor scaled without changing its aspect ratio, and it is placed as a lower-right 2D/2.5D viewmodel layer. Switching the active hand or weapon therefore changes the viewmodel automatically without introducing duplicate equipment state.
 
 Attack/crosshair mode gives the same weapon art a slightly larger, raised ready pose; normal movement keeps it lower in frame. This is intentionally a presentation prototype using original local assets, not a final reconstructed weapon model. Native weapon state, ammo, AP, attacks, and animations remain authoritative.
+
+
+## First-person weapon presentation layer
+
+Weapon rendering is now split into two concerns: Fallout remains authoritative for the active item, hit mode, native critter animation, ammo, AP, and combat; the first-person layer translates that state into a presentation pose. The viewmodel currently supports Lowered, Ready, Attack, and Reload poses.
+
+Presentation profiles are keyed from Fallout's native weapon animation category (pistol, SMG, shotgun/rifle, minigun/launcher, and melee families). Each profile can independently tune width, horizontal framing, and vertical placement per pose. The current inventory FRM remains only a temporary visual source, but future first-person art or 2.5D reconstructions can plug into this layer without changing equipment/combat logic.
+
+Attack pose detection follows the player's native critter animation (melee, throw, point/fire/burst/continuous fire). Crosshair mode selects Ready; reload hit modes select Reload; normal exploration selects Lowered.
