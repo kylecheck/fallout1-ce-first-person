@@ -27,9 +27,10 @@ and emits one straight east/west line. North/south pieces already align on the
 world-Y basis.
 
 The snapshot also contained many `block.frm` wall and scenery objects around
-visible wall runs. They remain invisible in first person. They are useful later
-for collision/validation, but are no longer treated as visible wall
-connectivity.
+visible wall runs. Their 1x1 art remains invisible in first person. Wall-type
+blockers are now used only as conservative structural evidence when a chain is
+proven by compatible visible wall geometry on both ends; raw adjacency still
+does not create visible branches.
 
 ## Geometry rules
 
@@ -88,8 +89,8 @@ g++ -std=c++17 -Wall -Wextra -Werror -Isrc \
 ```
 
 The test verifies Wall Light Type masking, both straight wall axes, east/west
-hex-parity correction, the four corner direction patterns, and near-plane UV
-clipping.
+hex-parity correction, the four corner direction patterns and continuation
+deltas, seam overlap, and near-plane UV clipping.
 
 ## Export actual map topology
 
