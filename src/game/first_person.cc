@@ -192,6 +192,7 @@ struct FirstPersonWallMaterial {
     int height;
     std::vector<unsigned char> pixels;
 };
+static std::vector<FirstPersonWallMaterial> gFirstPersonWallMaterials;
 
 struct FirstPersonDoorSprite {
     Object* object;
@@ -1331,9 +1332,8 @@ void first_person_render()
     // Build reusable first-person materials from the original isometric wall
     // FRMs. The material owns copied pixels, so the art cache can be unlocked
     // immediately and the same material can be shared by many wall segments.
-    std::vector<FirstPersonWallMaterial> wallMaterials;
-    auto getWallMaterial = [&wallMaterials](int fid, int direction, unsigned int extendedFlags) -> FirstPersonWallMaterial* {
-        for (FirstPersonWallMaterial& material : wallMaterials) {
+    auto getWallMaterial = [](int fid, int direction, unsigned int extendedFlags) -> FirstPersonWallMaterial* {
+        for (FirstPersonWallMaterial& material : gFirstPersonWallMaterials) {
             if (material.fid == fid && material.direction == direction) {
                 return &material;
             }
@@ -1368,8 +1368,8 @@ void first_person_render()
             if (face.width <= 0 || face.height <= 0) {
                 return nullptr;
             }
-            wallMaterials.push_back({ fid, direction, face.width, face.height, std::move(face.pixels) });
-            return &wallMaterials.back();
+            gFirstPersonWallMaterials.push_back({ fid, direction, face.width, face.height, std::move(face.pixels) });
+            return &gFirstPersonWallMaterials.back();
         }
 
         int opaqueMinX = frame->width;
@@ -1457,14 +1457,14 @@ void first_person_render()
         }
 
         art_ptr_unlock(cacheEntry);
-        wallMaterials.push_back({
+        gFirstPersonWallMaterials.push_back({
             fid,
             direction,
             materialWidth,
             materialHeight,
             std::move(rectified),
         });
-        return &wallMaterials.back();
+        return &gFirstPersonWallMaterials.back();
     };
 
     auto straightMaterialForCornerArm = [&](const FirstPersonWallSprite& corner,
@@ -2107,6 +2107,10 @@ void first_person_render()
     }
 
     Object* firstPersonHoverObject = nullptr;
+    const bool firstPersonCombatAim =
+        gmouse_3d_get_mode() == GAME_MOUSE_MODE_CROSSHAIR;
+    const int hoverX = firstPersonCombatAim ? width / 2 : mouseX;
+    const int hoverY = firstPersonCombatAim ? height / 2 : mouseY;
 
     // Native Fallout outlines are painted by the isometric world renderer, so
     // they are not visible when the first-person scene replaces that renderer.
@@ -2115,13 +2119,13 @@ void first_person_render()
     // the actual visible pixels of the selected live object, and intentionally
     // ignores walls so a room surface cannot steal interaction feedback from a
     // nearby critter, item or scenery object.
-    if (mouseX >= 0 && mouseX < width && mouseY >= 0 && mouseY < height) {
+    if (hoverX >= 0 && hoverX < width && hoverY >= 0 && hoverY < height) {
         constexpr int kPickAssistRadius = 6;
         FirstPersonPick hoverPick { nullptr, -1 };
         int bestDistanceSquared = kPickAssistRadius * kPickAssistRadius + 1;
 
         for (int dy = -kPickAssistRadius; dy <= kPickAssistRadius; dy++) {
-            const int py = mouseY + dy;
+            const int py = hoverY + dy;
             if (py < 0 || py >= height) {
                 continue;
             }
@@ -2133,7 +2137,7 @@ void first_person_render()
                     continue;
                 }
 
-                const int px = mouseX + dx;
+                const int px = hoverX + dx;
                 if (px < 0 || px >= width) {
                     continue;
                 }
