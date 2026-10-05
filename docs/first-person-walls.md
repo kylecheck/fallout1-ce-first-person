@@ -652,3 +652,14 @@ deflection (18 of the internal 15-degree heading units per second), up from
 about 150 degrees/second. The dead zone and continuous heading model are
 unchanged; this is a responsiveness pass so free look reads as a camera rather
 than as a slightly faster version of the 15-degree D-pad turn step.
+
+
+## First-person eye-height tuning
+
+The first-person eye height was raised from 0.50 to 0.62 world units. The same
+shared value is used by the floor projection, wall/object placement, visible
+hex projection, and screen-to-world target-tile conversion so raising the
+camera does not desynchronize the cursor from the rendered ground.
+
+This is an initial calibration pass rather than a final physical scale. Vault
+window sightlines are the preferred visual reference for the next adjustment.
