@@ -34,7 +34,7 @@
 namespace fallout {
 
 static bool gFirstPersonEnabled = false;
-static constexpr double kFirstPersonEyeHeight = 0.68;
+static constexpr double kFirstPersonEyeHeight = 0.74;
 static int gFirstPersonWindow = -1;
 static bool gFirstPersonRestoreInterface = false;
 // Camera heading is measured in 15-degree units, but stored continuously so
@@ -334,7 +334,7 @@ static bool first_person_update_controller_look()
     // SDL's right-stick Y axis is negative when pushed up. Treat that as
     // positive camera pitch. Pitch deliberately stays modest because Fallout's
     // maps have no true ceiling/floor geometry above and below the play plane.
-    constexpr double kPitchDegreesPerSecond = 90.0;
+    constexpr double kPitchDegreesPerSecond = 180.0;
     constexpr double kPitchUpLimitDegrees = 18.0;
     constexpr double kPitchDownLimitDegrees = 40.0;
     gFirstPersonPitchDegrees = std::clamp(
