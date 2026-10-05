@@ -1025,10 +1025,11 @@ void first_person_render()
         }
     }
 
-    // First-person doors are structural scenery, not billboards. Closed doors
+    // First-person doors are structural scenery while closed. Closed doors
     // occupy the same wall lattice as the opening and participate in depth/pick
     // testing. Fallout animates doors away from frame 0 while opening; those
-    // non-zero frames are treated as an open passage for this first milestone.
+    // non-zero frames are left to the live scenery billboard pass below so the
+    // moving/open door remains visible instead of disappearing from the scene.
     // Native collision/use logic remains authoritative.
     constexpr double kDoorHeight = 1.55;
     for (const FirstPersonDoorSprite& door : doors) {
@@ -1172,8 +1173,11 @@ void first_person_render()
             if (PID_TYPE(object->pid) == OBJ_TYPE_SCENERY
                 && proto_ptr(object->pid, &sceneryProto) == 0
                 && sceneryProto != nullptr
-                && sceneryProto->scenery.type == SCENERY_TYPE_DOOR) {
-                // Doors have their own structural pass above.
+                && sceneryProto->scenery.type == SCENERY_TYPE_DOOR
+                && object->frame == 0) {
+                // Closed doors have their own structural pass above. Once the
+                // native door animation advances, keep rendering the live FRM
+                // as scenery instead of making the door vanish completely.
                 continue;
             }
         }
