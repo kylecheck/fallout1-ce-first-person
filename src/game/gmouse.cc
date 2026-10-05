@@ -1580,10 +1580,23 @@ Object* object_under_mouse(int objectType, bool a2, int elevation)
     mouse_get_position(&mouseX, &mouseY);
 
     if (first_person_is_enabled()) {
-        if (win_get_top_win(mouseX, mouseY) != first_person_window()) {
+        // Interactions still follow the real mouse/trackpad pointer, but combat
+        // aiming is camera-centered so right-stick look and the visible reticle
+        // select the same target in first person.
+        int pickX = mouseX;
+        int pickY = mouseY;
+        if (gmouse_3d_current_mode == GAME_MOUSE_MODE_CROSSHAIR) {
+            Rect viewRect;
+            if (win_get_rect(first_person_window(), &viewRect) == 0) {
+                pickX = viewRect.ulx + rectGetWidth(&viewRect) / 2;
+                pickY = viewRect.uly + rectGetHeight(&viewRect) / 2;
+            }
+        }
+
+        if (win_get_top_win(pickX, pickY) != first_person_window()) {
             return nullptr;
         }
-        return first_person_object_at(mouseX, mouseY, objectType, a2, elevation);
+        return first_person_object_at(pickX, pickY, objectType, a2, elevation);
     }
 
     bool v13 = false;
