@@ -119,6 +119,18 @@ int main()
         assert(endpoint_matches(corner[1], vertical[0]));
     }
 
+    // Odd-column corners use the opposite quarter-hex offset. Verify both
+    // vertical directions still land on the straight-wall lattice.
+    {
+        const int oddTile = 20101;
+        const auto north = segments(oddTile, northCorner);
+        const auto south = segments(oddTile, southCorner);
+        const auto northVertical = segments(oddTile + 200, ns);
+        const auto southVertical = segments(oddTile - 200, ns);
+        assert(endpoint_matches(north[1], northVertical[0]));
+        assert(endpoint_matches(south[1], southVertical[0]));
+    }
+
     // Unknown/custom types retain deterministic fallback geometry.
     {
         const auto fallback = segments(20100, 0x18000000u, 2);
