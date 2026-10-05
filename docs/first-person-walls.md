@@ -133,3 +133,28 @@ The renderer also uses a slightly larger world-space overlap at joins and a
 small endpoint-only opaque-pixel repair for sloped isometric FRM edges. These
 measures are deliberately local: they should hide projection/alpha cracks
 without filling authored windows or turning genuine door openings into walls.
+
+
+## Rectified wall materials
+
+Fallout wall FRMs are isometric cutouts, not rectangular textures. Treating
+their transparent mask literally in first person created large black holes even
+when the reconstructed wall plane itself was correct.
+
+The renderer now builds a temporary rectangular material for every visible wall
+FRM before projection:
+
+- find the opaque span independently on every source scanline
+- stretch that scanline's opaque span across the rectangular material width
+- if a sampled texel inside the span is transparent, replace it with the nearest
+  opaque texel from the same scanline
+- if an entire scanline is empty, borrow the nearest non-empty scanline
+- project the resulting solid material onto the existing structural wall plane
+
+This deliberately separates wall structure from 2D sprite alpha. Genuine
+openings should ultimately come from map semantics such as doors and their
+state, rather than from transparent pixels authored for the original isometric
+compositor.
+
+The rectified material is precomputed once per visible wall object per frame,
+instead of searching for replacement texels for every projected screen pixel.
