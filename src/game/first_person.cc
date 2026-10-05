@@ -12,6 +12,11 @@
 #include <vector>
 
 #include "game/art.h"
+#include "game/combat.h"
+#include "game/critter.h"
+#include "game/gmouse.h"
+#include "game/intface.h"
+#include "game/item.h"
 #include "game/map.h"
 #include "game/object_types.h"
 #include "game/tile.h"
@@ -21,6 +26,7 @@
 #include "plib/gnw/gnw.h"
 #include "plib/gnw/grbuf.h"
 #include "plib/gnw/mouse.h"
+#include "plib/gnw/text.h"
 
 namespace fallout {
 
@@ -1713,6 +1719,8 @@ void first_person_render()
         art_ptr_unlock(cacheEntry);
     }
 
+    Object* firstPersonHoverObject = nullptr;
+
     // Native Fallout outlines are painted by the isometric world renderer, so
     // they are not visible when the first-person scene replaces that renderer.
     // Give the pick buffer its own lightweight hover feedback instead. This
@@ -1759,6 +1767,7 @@ void first_person_render()
         }
 
         if (hoverPick.object != nullptr) {
+            firstPersonHoverObject = hoverPick.object;
             int minPickX = width;
             int minPickY = height;
             int maxPickX = -1;
@@ -1803,6 +1812,208 @@ void first_person_render()
                 }
             }
         }
+    }
+
+    // First-person mode/combat presentation. Native Fallout remains the
+    // authority for combat state, AP, weapon state, range and hit chance; this
+    // pass only mirrors that information into the first-person viewport.
+    {
+        const int mode = gmouse_3d_get_mode();
+        const char* modeName = "MOVE";
+        switch (mode) {
+        case GAME_MOUSE_MODE_ARROW:
+            modeName = "INTERACT";
+            break;
+        case GAME_MOUSE_MODE_CROSSHAIR:
+            modeName = "ATTACK";
+            break;
+        case GAME_MOUSE_MODE_USE_CROSSHAIR:
+            modeName = "USE ITEM";
+            break;
+        case GAME_MOUSE_MODE_USE_FIRST_AID:
+            modeName = "FIRST AID";
+            break;
+        case GAME_MOUSE_MODE_USE_DOCTOR:
+            modeName = "DOCTOR";
+            break;
+        case GAME_MOUSE_MODE_USE_LOCKPICK:
+            modeName = "LOCKPICK";
+            break;
+        case GAME_MOUSE_MODE_USE_STEAL:
+            modeName = "STEAL";
+            break;
+        case GAME_MOUSE_MODE_USE_TRAPS:
+            modeName = "TRAPS";
+            break;
+        case GAME_MOUSE_MODE_USE_SCIENCE:
+            modeName = "SCIENCE";
+            break;
+        case GAME_MOUSE_MODE_USE_REPAIR:
+            modeName = "REPAIR";
+            break;
+        default:
+            break;
+        }
+
+        char modeLine[160];
+        std::snprintf(modeLine, sizeof(modeLine), "MODE: %s", modeName);
+
+        char combatLine[256] = { 0 };
+        const bool attackPresentation =
+            isInCombat() || mode == GAME_MOUSE_MODE_CROSSHAIR;
+        if (attackPresentation) {
+            int hitMode = 0;
+            bool aiming = false;
+            const bool haveAttack =
+                intface_get_attack(&hitMode, &aiming) == 0;
+
+            const int ap = obj_dude->data.critter.combat.ap;
+            int apCost = -1;
+            int ammo = -1;
+            int ammoMax = -1;
+            Object* weapon = nullptr;
+
+            if (haveAttack) {
+                apCost = item_w_mp_cost(obj_dude, hitMode, aiming);
+                weapon = item_hit_with(obj_dude, hitMode);
+                if (weapon != nullptr) {
+                    ammoMax = item_w_max_ammo(weapon);
+                    if (ammoMax > 0) {
+                        ammo = item_w_curr_ammo(weapon);
+                    }
+                }
+            }
+
+            char targetInfo[128] = "TARGET: --";
+            if (firstPersonHoverObject != nullptr
+                && FID_TYPE(firstPersonHoverObject->fid) == OBJ_TYPE_CRITTER
+                && firstPersonHoverObject != obj_dude) {
+                const char* name = critter_name(firstPersonHoverObject);
+                if (name == nullptr || *name == '\0') {
+                    name = "CRITTER";
+                }
+
+                if (haveAttack) {
+                    const int badShot = combat_check_bad_shot(
+                        obj_dude,
+                        firstPersonHoverObject,
+                        hitMode,
+                        aiming);
+
+                    const char* reason = nullptr;
+                    switch (badShot) {
+                    case COMBAT_BAD_SHOT_NO_AMMO:
+                        reason = "NO AMMO";
+                        break;
+                    case COMBAT_BAD_SHOT_OUT_OF_RANGE:
+                        reason = "OUT OF RANGE";
+                        break;
+                    case COMBAT_BAD_SHOT_NOT_ENOUGH_AP:
+                        reason = "NOT ENOUGH AP";
+                        break;
+                    case COMBAT_BAD_SHOT_ALREADY_DEAD:
+                        reason = "DEAD";
+                        break;
+                    case COMBAT_BAD_SHOT_AIM_BLOCKED:
+                        reason = "AIM BLOCKED";
+                        break;
+                    case COMBAT_BAD_SHOT_ARM_CRIPPLED:
+                        reason = "ARM CRIPPLED";
+                        break;
+                    case COMBAT_BAD_SHOT_BOTH_ARMS_CRIPPLED:
+                        reason = "ARMS CRIPPLED";
+                        break;
+                    default:
+                        break;
+                    }
+
+                    if (reason != nullptr) {
+                        std::snprintf(
+                            targetInfo,
+                            sizeof(targetInfo),
+                            "TARGET: %s  %s",
+                            name,
+                            reason);
+                    } else {
+                        const int accuracy = determine_to_hit(
+                            obj_dude,
+                            firstPersonHoverObject,
+                            HIT_LOCATION_UNCALLED,
+                            hitMode);
+                        std::snprintf(
+                            targetInfo,
+                            sizeof(targetInfo),
+                            "TARGET: %s  HIT %d%%",
+                            name,
+                            std::clamp(accuracy, 0, 95));
+                    }
+                } else {
+                    std::snprintf(
+                        targetInfo,
+                        sizeof(targetInfo),
+                        "TARGET: %s",
+                        name);
+                }
+            }
+
+            if (ammoMax > 0) {
+                std::snprintf(
+                    combatLine,
+                    sizeof(combatLine),
+                    "AP %d  COST %d  AMMO %d/%d  %s",
+                    ap,
+                    std::max(0, apCost),
+                    std::max(0, ammo),
+                    ammoMax,
+                    targetInfo);
+            } else {
+                std::snprintf(
+                    combatLine,
+                    sizeof(combatLine),
+                    "AP %d  COST %d  %s",
+                    ap,
+                    std::max(0, apCost),
+                    targetInfo);
+            }
+        }
+
+        const int oldFont = text_curr();
+        text_font(101);
+        const int lineHeight = text_height();
+        const int padding = 4;
+        const int modeWidth = text_width(modeLine);
+        const int combatWidth = combatLine[0] != '\0' ? text_width(combatLine) : 0;
+        const int panelWidth = std::min(
+            width,
+            std::max(modeWidth, combatWidth) + padding * 2);
+        const int panelHeight =
+            lineHeight * (combatLine[0] != '\0' ? 2 : 1) + padding * 2;
+
+        if (panelWidth > 0 && panelHeight > 0) {
+            buf_fill(buffer, panelWidth, panelHeight, width, colorTable[0]);
+            text_to_buf(
+                buffer + padding * width + padding,
+                modeLine,
+                panelWidth - padding * 2,
+                width,
+                colorTable[992]);
+
+            if (combatLine[0] != '\0') {
+                const int combatColor =
+                    firstPersonHoverObject != nullptr
+                        && FID_TYPE(firstPersonHoverObject->fid) == OBJ_TYPE_CRITTER
+                    ? colorTable[31744]
+                    : colorTable[992];
+                text_to_buf(
+                    buffer + (padding + lineHeight) * width + padding,
+                    combatLine,
+                    panelWidth - padding * 2,
+                    width,
+                    combatColor);
+            }
+        }
+
+        text_font(oldFont);
     }
 
     // Draw an explicit first-person pointer after our scene has covered the
