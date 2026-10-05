@@ -200,7 +200,7 @@ int first_person_rotation()
 void first_person_turn(int steps)
 {
     if (!gFirstPersonEnabled) {
-        return;
+        return false;
     }
 
     constexpr double kHeadingCount = ROTATION_COUNT * 4.0;
@@ -212,6 +212,22 @@ void first_person_turn(int steps)
     gFirstPersonCameraRevision++;
     gFirstPersonPicks.clear();
     gFirstPersonInteractionPicks.clear();
+    return true;
+}
+
+void first_person_update()
+{
+    if (!gFirstPersonEnabled) {
+        return;
+    }
+
+    if (first_person_update_controller_look()) {
+        // Controller look must drive repaint itself. Polling only from the
+        // render path creates a deadlock after certain mouse/combat mode
+        // changes: no repaint means no controller poll, so the camera appears
+        // frozen until some unrelated world update occurs.
+        tile_refresh_display();
+    }
 }
 
 static int first_person_horizon(int width, int height)
@@ -228,7 +244,7 @@ static int first_person_horizon(int width, int height)
     return std::clamp(shifted, height / 12, height * 11 / 12);
 }
 
-static void first_person_update_controller_look()
+static bool first_person_update_controller_look()
 {
     if (!gFirstPersonEnabled) {
         return;
@@ -236,7 +252,7 @@ static void first_person_update_controller_look()
 
     if ((SDL_WasInit(SDL_INIT_GAMECONTROLLER) & SDL_INIT_GAMECONTROLLER) == 0) {
         if (SDL_InitSubSystem(SDL_INIT_GAMECONTROLLER) != 0) {
-            return;
+            return false;
         }
     }
 
@@ -260,7 +276,7 @@ static void first_person_update_controller_look()
     const Uint64 now = SDL_GetTicks64();
     if (gFirstPersonControllerTicks == 0) {
         gFirstPersonControllerTicks = now;
-        return;
+        return false;
     }
 
     const double dt = std::min(
@@ -269,7 +285,7 @@ static void first_person_update_controller_look()
     gFirstPersonControllerTicks = now;
 
     if (gFirstPersonController == nullptr || dt <= 0.0) {
-        return;
+        return false;
     }
 
     auto normalizeAxis = [](Sint16 raw) {
@@ -297,7 +313,7 @@ static void first_person_update_controller_look()
     yawAxis = applyDeadZone(yawAxis);
     pitchAxis = applyDeadZone(pitchAxis);
     if (yawAxis == 0.0 && pitchAxis == 0.0) {
-        return;
+        return false;
     }
 
     // Horizontal look remains roughly 150 degrees/sec at full deflection.
@@ -640,11 +656,6 @@ void first_person_render()
     }
 
     first_person_dump_map();
-
-    // Read the native controller independently of the Fallout mouse cursor.
-    // Steam Input can therefore expose the right stick as a gamepad axis while
-    // the right trackpad continues to emulate the real mouse.
-    first_person_update_controller_look();
 
     gPickWidth = width;
     gPickHeight = height;
