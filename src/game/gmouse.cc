@@ -611,7 +611,7 @@ void gmouse_bk_process()
         gmouse_bk_last_cursor = -1;
     }
 
-    if (win_get_top_win(mouseX, mouseY) != display_win) {
+    if (win_get_top_win(mouseX, mouseY) != first_person_window()) {
         if (gmouse_current_cursor == MOUSE_CURSOR_NONE) {
             gmouse_3d_off();
             gmouse_set_cursor(MOUSE_CURSOR_ARROW);
@@ -859,7 +859,10 @@ void gmouse_handle_event(int mouseX, int mouseY, int mouseState)
         }
     }
 
-    if (!mouse_click_in(0, 0, scr_size.lrx - scr_size.ulx, scr_size.lry - scr_size.uly - 100)) {
+    const int mouseBottom = first_person_is_enabled()
+        ? scr_size.lry - scr_size.uly
+        : scr_size.lry - scr_size.uly - 100;
+    if (!mouse_click_in(0, 0, scr_size.lrx - scr_size.ulx, mouseBottom)) {
         return;
     }
 
@@ -1574,7 +1577,7 @@ Object* object_under_mouse(int objectType, bool a2, int elevation)
     mouse_get_position(&mouseX, &mouseY);
 
     if (first_person_is_enabled()) {
-        if (win_get_top_win(mouseX, mouseY) != display_win) {
+        if (win_get_top_win(mouseX, mouseY) != first_person_window()) {
             return nullptr;
         }
         return first_person_object_at(mouseX, mouseY, objectType, a2, elevation);
@@ -2197,7 +2200,8 @@ static int gmouse_3d_move_to(int x, int y, int elevation, Rect* a4)
                 // Repaint the first-person pointer even over the sky. Do not
                 // move the engine hex cursor to an invalid tile; click and AP
                 // paths independently reject this missing ground intersection.
-                *a4 = { 0, 0, win_width(display_win) - 1, win_height(display_win) - 1 };
+                const int viewWindow = first_person_window();
+                *a4 = { 0, 0, win_width(viewWindow) - 1, win_height(viewWindow) - 1 };
                 return 0;
             }
             if (tile != -1) {
