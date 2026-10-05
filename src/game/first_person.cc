@@ -542,6 +542,8 @@ void first_person_render()
         int opaqueMaxX = 0;
         int opaqueMinY = 0;
         int opaqueMaxY = 0;
+        std::vector<int> rowOpaqueMinX;
+        std::vector<int> rowOpaqueMaxX;
         if (!debugWalls) {
             Art* art = art_ptr_lock(wall.fid, &cacheEntry);
             if (art == nullptr) {
@@ -562,9 +564,13 @@ void first_person_render()
             opaqueMaxX = -1;
             opaqueMinY = frame->height;
             opaqueMaxY = -1;
+            rowOpaqueMinX.assign(frame->height, frame->width);
+            rowOpaqueMaxX.assign(frame->height, -1);
             for (int sy = 0; sy < frame->height; sy++) {
                 for (int sx = 0; sx < frame->width; sx++) {
                     if (pixels[sy * frame->width + sx] != 0) {
+                        rowOpaqueMinX[sy] = std::min(rowOpaqueMinX[sy], sx);
+                        rowOpaqueMaxX[sy] = std::max(rowOpaqueMaxX[sy], sx);
                         opaqueMinX = std::min(opaqueMinX, sx);
                         opaqueMaxX = std::max(opaqueMaxX, sx);
                         opaqueMinY = std::min(opaqueMinY, sy);
@@ -581,7 +587,6 @@ void first_person_render()
 
         // FRM reconstruction is a separate material approximation: keep its
         // existing crop and height scaling, never its width/anchor as topology.
-        const int opaqueWidth = opaqueMaxX - opaqueMinX + 1;
         const int opaqueHeight = opaqueMaxY - opaqueMinY + 1;
         const double worldHeight = debugWalls ? 1.65
             : std::clamp(opaqueHeight * (1.65 / 110.0), 0.65, 1.85);
@@ -656,39 +661,71 @@ void first_person_render()
                     continue;
                 }
 
-                const int sourceX = std::clamp(
-                    opaqueMinX + static_cast<int>(worldT * std::max(0, opaqueWidth - 1)),
-                    opaqueMinX,
-                    opaqueMaxX);
                 for (int screenY = std::max(0, top); screenY <= std::min(height - 1, bottom); screenY++) {
-                    const int sourceY = std::clamp(
+                    int sourceY = std::clamp(
                         opaqueMinY + (screenY - top) * opaqueHeight / columnHeight,
                         opaqueMinY,
                         opaqueMaxY);
-                    unsigned char pixel = debugWalls
-                        ? colorTable[debugWallColor(wallKind)]
-                        : pixels[sourceY * frame->width + sourceX];
-
-                    // Isometric wall FRMs often leave one or two transparent
-                    // columns at their edges. Even with structurally touching
-                    // planes those alpha margins show up as first-person cracks.
-                    // Only near a segment endpoint, borrow the nearest opaque
-                    // texel from the same scanline. Interior transparency is
-                    // preserved for authored holes/windows.
-                    if (!debugWalls && pixel == 0 && (s < 0.12 || s > 0.88)) {
-                        for (int radius = 1; radius <= 4 && pixel == 0; radius++) {
-                            const int leftX = sourceX - radius;
-                            const int rightX = sourceX + radius;
-                            if (leftX >= opaqueMinX) {
-                                pixel = pixels[sourceY * frame->width + leftX];
-                            }
-                            if (pixel == 0 && rightX <= opaqueMaxX) {
-                                pixel = pixels[sourceY * frame->width + rightX];
+                    unsigned char pixel;
+                    if (debugWalls) {
+                        pixel = colorTable[debugWallColor(wallKind)];
+                    } else {
+                        // A Fallout wall FRM is an isometric cutout, not a
+                        // rectangular texture. Rectify it scanline-by-scanline:
+                        // map wall U across the opaque span of this row instead
+                        // of across the FRM's global bounding box. This removes
+                        // the diagonal/stepped alpha silhouette from the 3D
+                        // material while preserving the art itself.
+                        if (rowOpaqueMaxX[sourceY] < rowOpaqueMinX[sourceY]) {
+                            for (int radius = 1; radius < frame->height; radius++) {
+                                const int up = sourceY - radius;
+                                const int down = sourceY + radius;
+                                if (up >= opaqueMinY
+                                    && rowOpaqueMaxX[up] >= rowOpaqueMinX[up]) {
+                                    sourceY = up;
+                                    break;
+                                }
+                                if (down <= opaqueMaxY
+                                    && rowOpaqueMaxX[down] >= rowOpaqueMinX[down]) {
+                                    sourceY = down;
+                                    break;
+                                }
                             }
                         }
-                    }
-                    if (pixel == 0) {
-                        continue;
+
+                        const int rowMinX = rowOpaqueMinX[sourceY];
+                        const int rowMaxX = rowOpaqueMaxX[sourceY];
+                        if (rowMaxX < rowMinX) {
+                            continue;
+                        }
+
+                        const double materialU = std::clamp(worldT, 0.0, 1.0);
+                        const int sourceX = std::clamp(
+                            rowMinX + static_cast<int>(materialU * std::max(0, rowMaxX - rowMinX)),
+                            rowMinX,
+                            rowMaxX);
+                        pixel = pixels[sourceY * frame->width + sourceX];
+
+                        // Transparency inside an opaque scanline is part of the
+                        // original 2D compositing mask. A structural wall plane
+                        // must remain solid; use the nearest opaque texel from
+                        // the same row. Real openings will come from map
+                        // semantics (doors/scenery), not wall-sprite alpha.
+                        if (pixel == 0) {
+                            for (int radius = 1; radius <= rowMaxX - rowMinX && pixel == 0; radius++) {
+                                const int leftX = sourceX - radius;
+                                const int rightX = sourceX + radius;
+                                if (leftX >= rowMinX) {
+                                    pixel = pixels[sourceY * frame->width + leftX];
+                                }
+                                if (pixel == 0 && rightX <= rowMaxX) {
+                                    pixel = pixels[sourceY * frame->width + rightX];
+                                }
+                            }
+                        }
+                        if (pixel == 0) {
+                            continue;
+                        }
                     }
 
                     const int destination = screenY * width + screenX;
