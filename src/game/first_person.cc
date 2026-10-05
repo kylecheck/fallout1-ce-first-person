@@ -810,6 +810,87 @@ void first_person_render()
         return &wallMaterials.back();
     };
 
+    // Mirror Fallout's native "translucent egg" wall-side test. We do not
+    // render the egg in first person; this is metadata telling us that the
+    // original isometric wall art may have been authored to participate in
+    // player-visibility masking and therefore should not be trusted as a
+    // complete first-person surface.
+    auto nativeEggSensitiveWall = [](const FirstPersonWallSprite& wall) {
+        if (wall.object == nullptr
+            || (wall.object->flags & OBJECT_FLAG_0xFC000) != 0) {
+            return false;
+        }
+
+        const unsigned int extendedFlags = wall.extendedFlags;
+        bool sensitive;
+        if ((extendedFlags & 0x08000000u) != 0
+            || (extendedFlags & 0x80000000u) != 0) {
+            sensitive = tile_in_front_of(wall.tile, obj_dude->tile);
+            if (sensitive
+                && tile_to_right_of(wall.tile, obj_dude->tile)
+                && (wall.object->flags & OBJECT_WALL_TRANS_END) != 0) {
+                sensitive = false;
+            }
+        } else if ((extendedFlags & 0x10000000u) != 0) {
+            sensitive = tile_in_front_of(wall.tile, obj_dude->tile)
+                || tile_to_right_of(obj_dude->tile, wall.tile);
+        } else if ((extendedFlags & 0x20000000u) != 0) {
+            sensitive = tile_in_front_of(wall.tile, obj_dude->tile)
+                && tile_to_right_of(obj_dude->tile, wall.tile);
+        } else {
+            sensitive = tile_to_right_of(obj_dude->tile, wall.tile);
+            if (sensitive
+                && tile_in_front_of(obj_dude->tile, wall.tile)
+                && (wall.object->flags & OBJECT_WALL_TRANS_END) != 0) {
+                sensitive = false;
+            }
+        }
+
+        return sensitive;
+    };
+
+    auto straightMaterialAlongAxis = [&](const FirstPersonWallSprite& wall,
+                                        bool horizontal)
+        -> const FirstPersonWallSprite* {
+        const FirstPersonWallKind desired = horizontal
+            ? FIRST_PERSON_WALL_EAST_WEST
+            : FIRST_PERSON_WALL_NORTH_SOUTH;
+        const int deltas[2] = {
+            horizontal ? -1 : -200,
+            horizontal ? 1 : 200,
+        };
+
+        const FirstPersonWallSprite* best = nullptr;
+        int bestSteps = 999;
+        for (int delta : deltas) {
+            int tile = wall.tile + delta;
+            for (int step = 1; step <= 6; step++, tile += delta) {
+                if (doorAtTile(tile)) {
+                    break;
+                }
+
+                const FirstPersonWallSprite* candidate = wallAtTile(tile);
+                if (candidate != nullptr) {
+                    if (first_person_wall_kind(candidate->extendedFlags) == desired
+                        && step < bestSteps) {
+                        best = candidate;
+                        bestSteps = step;
+                    }
+                    break;
+                }
+
+                // Do not search through arbitrary empty map space. A farther
+                // material source is valid only when Fallout's blocker topology
+                // proves continuity on this axis.
+                if (!blockAtTile(tile)) {
+                    break;
+                }
+            }
+        }
+
+        return best != nullptr ? best : &wall;
+    };
+
     auto straightMaterialForCornerArm = [&](const FirstPersonWallSprite& corner,
                                            FirstPersonWallKind cornerKind,
                                            const FirstPersonWallSegment& segment)
@@ -870,6 +951,22 @@ void first_person_render()
                     straightMaterialForCornerArm(wall, wallKind, sourceSegment);
             }
 
+            // Native Fallout may cut an "egg" through particular wall pieces
+            // depending on player position and the same extendedFlag classes
+            // that define wall sidedness. In first person the wall must remain
+            // structurally solid, so egg-sensitive pieces prefer a clean
+            // straight continuation material on the same face axis.
+            if (!debugWalls && nativeEggSensitiveWall(wall)) {
+                const bool horizontal =
+                    std::abs(sourceSegment.bx - sourceSegment.ax)
+                    >= std::abs(sourceSegment.by - sourceSegment.ay);
+                const FirstPersonWallSprite* cleanWall =
+                    straightMaterialAlongAxis(wall, horizontal);
+                if (cleanWall != &wall) {
+                    materialWall = cleanWall;
+                }
+            }
+
             FirstPersonWallMaterial* material = nullptr;
             if (!debugWalls) {
                 material = getWallMaterial(materialWall->fid, materialWall->direction);
@@ -885,10 +982,10 @@ void first_person_render()
             }
 
             FirstPersonWallSegment materialSegment = sourceSegment;
-            if (materialWall != &wall && first_person_wall_is_corner(wallKind)) {
-                // Borrowed straight art should cover the whole corner arm.
-                // Preserve the arm's original texture direction so patterns do
-                // not flip at the join.
+            if (materialWall != &wall) {
+                // Borrowed straight art should cover the whole structural face,
+                // whether this is a corner arm or an egg-sensitive straight
+                // piece. Preserve source direction so patterns do not flip.
                 const bool reversed = sourceSegment.u1 < sourceSegment.u0;
                 materialSegment.u0 = reversed ? 1.0 : 0.0;
                 materialSegment.u1 = reversed ? 0.0 : 1.0;
