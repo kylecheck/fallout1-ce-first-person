@@ -354,6 +354,10 @@ void first_person_render()
     buf_fill(buffer + horizon * width, width, height - horizon, width, ground);
 
     constexpr int kHexGridWidth = 200;
+    // Visibility and structural evidence are separate. Keep enough topology
+    // outside the draw radius for the six-cell bridge/material searches.
+    constexpr int kRenderRadius = 48;
+    constexpr int kTopologyRadius = kRenderRadius + 6;
     constexpr double kSqrt3Over2 = 0.8660254037844386;
     constexpr double kPi = 3.14159265358979323846;
     constexpr double kNearPlane = 0.45;
@@ -581,7 +585,7 @@ void first_person_render()
             || wall->tile >= kHexGridWidth * kHexGridWidth
             || (wall->flags & OBJECT_HIDDEN) != 0
             || FID_TYPE(wall->fid) != OBJ_TYPE_WALL
-            || tile_dist(obj_dude->tile, wall->tile) > 18) {
+            || tile_dist(obj_dude->tile, wall->tile) > kTopologyRadius) {
             continue;
         }
 
@@ -651,7 +655,7 @@ void first_person_render()
         const bool damagedPanel = std::strcmp(sceneryArt, "v13secr4.frm") == 0;
         if ((std::strcmp(sceneryArt, "v13secr6.frm") == 0 || damagedPanel)
             && (object->flags & OBJECT_HIDDEN) == 0
-            && tile_dist(obj_dude->tile, object->tile) <= 18) {
+            && tile_dist(obj_dude->tile, object->tile) <= kRenderRadius) {
             double worldX;
             double worldY;
             tileToWorld(object->tile, &worldX, &worldY);
@@ -670,7 +674,7 @@ void first_person_render()
             doorTiles.push_back(object->tile);
 
             if ((object->flags & OBJECT_HIDDEN) == 0
-                && tile_dist(obj_dude->tile, object->tile) <= 18) {
+                && tile_dist(obj_dude->tile, object->tile) <= kRenderRadius) {
                 double doorWorldX;
                 double doorWorldY;
                 tileToWorld(object->tile, &doorWorldX, &doorWorldY);
@@ -1051,6 +1055,9 @@ void first_person_render()
     // continuation wall's clean straight material. This avoids folding one
     // isometric corner sprite around two perpendicular first-person planes.
     for (const FirstPersonWallSprite& wall : renderedWalls) {
+        if (tile_dist(obj_dude->tile, wall.tile) > kRenderRadius) {
+            continue;
+        }
         const FirstPersonWallKind wallKind =
             first_person_wall_kind(wall.extendedFlags);
         const auto segments = first_person_wall_segments(
@@ -1430,7 +1437,7 @@ void first_person_render()
         if (object == obj_dude
             || object->tile < 0
             || (object->flags & OBJECT_HIDDEN) != 0
-            || tile_dist(obj_dude->tile, object->tile) > 18) {
+            || tile_dist(obj_dude->tile, object->tile) > kRenderRadius) {
             continue;
         }
 

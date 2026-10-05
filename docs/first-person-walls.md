@@ -453,3 +453,26 @@ or pick entry. No passage or new gameplay is inferred from the visual hole.
 Validation: strict C++17 syntax compilation and existing wall lattice,
 doorway and material regressions passed. The cropped source face was inspected
 visually; room placement still requires an in-game test.
+
+
+### Visibility radius and topology support
+
+The first-person collector previously rejected walls, doors and scenery beyond
+18 hexes. That cutoff caused visible pop-in in long rooms. It also removed
+wall/blocker evidence before six-cell bridge reconstruction and corner material
+borrowing, which could make boundary pieces change appearance as the player
+moved. The native character egg is an isometric screen-space masking effect;
+first-person wall materials read raw FRM pixels and do not apply that mask.
+
+The visible radius is now 48 hexes for walls, structural scenery, doors and
+billboards. Wall/blocker collection reaches 54 hexes, retaining six extra rings
+for the existing structural searches. Supporting walls outside 48 are evidence
+only, not drawn. All existing lattice geometry, opening rules, native collision,
+use and object state are unchanged. This is still a finite range; it does not
+claim to solve every isolated corner or reconstruct absent map geometry.
+
+Validation: strict C++17 compilation and standalone lattice/near-plane,
+doorway and material regressions. Deck testing should check distant room walls
+and whether remaining corner faults persist once the supporting walls are in
+range. Longer range may increase frame cost; no on-Deck performance result is
+claimed before that test.
