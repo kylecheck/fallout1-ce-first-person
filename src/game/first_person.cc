@@ -14,6 +14,7 @@
 #include <SDL.h>
 
 #include "game/art.h"
+#include "game/anim.h"
 #include "game/combat.h"
 #include "game/critter.h"
 #include "game/gmouse.h"
@@ -46,6 +47,7 @@ static double gFirstPersonPitchDegrees = 0.0;
 static int gFirstPersonCameraRevision = 0;
 static SDL_GameController* gFirstPersonController = nullptr;
 static Uint64 gFirstPersonControllerTicks = 0;
+static Uint64 gFirstPersonMoveTicks = 0;
 
 // Pick IDs are written only when a visible scene pixel wins the depth test.
 // Resolve against live map objects before returning; never dereference cached
@@ -190,6 +192,7 @@ int first_person_heading()
 }
 
 static bool first_person_update_controller_look();
+static void first_person_update_controller_move();
 
 int first_person_rotation()
 {
@@ -223,6 +226,8 @@ void first_person_update()
         return;
     }
 
+    first_person_update_controller_move();
+
     if (first_person_update_controller_look()) {
         // First-person owns a full-screen presentation window now. Redraw that
         // window directly for camera motion instead of routing every stick
@@ -230,6 +235,67 @@ void first_person_update()
         // The old path did extra work underneath the overlay and made free look
         // feel noticeably more stuttery than the 60 Hz gameplay loop.
         first_person_render();
+    }
+}
+
+static void first_person_update_controller_move()
+{
+    if (!gFirstPersonEnabled || obj_dude == nullptr || gFirstPersonController == nullptr) {
+        return;
+    }
+
+    auto normalizeAxis = [](Sint16 raw) {
+        return raw >= 0 ? raw / 32767.0 : raw / 32768.0;
+    };
+
+    const double x = normalizeAxis(SDL_GameControllerGetAxis(
+        gFirstPersonController,
+        SDL_CONTROLLER_AXIS_LEFTX));
+    const double y = normalizeAxis(SDL_GameControllerGetAxis(
+        gFirstPersonController,
+        SDL_CONTROLLER_AXIS_LEFTY));
+
+    constexpr double kMoveDeadZone = 0.32;
+    const double magnitude = std::sqrt(x * x + y * y);
+    if (magnitude < kMoveDeadZone) {
+        return;
+    }
+
+    const Uint64 now = SDL_GetTicks64();
+    constexpr Uint64 kMoveRepeatMilliseconds = 120;
+    if (gFirstPersonMoveTicks != 0
+        && now - gFirstPersonMoveTicks < kMoveRepeatMilliseconds) {
+        return;
+    }
+
+    // SDL Y is negative when pushing the stick forward. Convert the local
+    // stick vector into a camera-relative angle, then quantize only the final
+    // movement request to Fallout's six native hex directions.
+    const double localForward = -y;
+    const double localRight = x;
+    constexpr double kPi = 3.14159265358979323846;
+    const double localAngle = std::atan2(localRight, localForward);
+    const double desiredHeading = gFirstPersonHeading + localAngle / (kPi / 12.0);
+    int rotation = static_cast<int>(std::lround(desiredHeading / 4.0));
+    rotation = ((rotation % ROTATION_COUNT) + ROTATION_COUNT) % ROTATION_COUNT;
+
+    const int destination = tile_num_in_direction(obj_dude->tile, rotation, 1);
+    if (destination < 0) {
+        return;
+    }
+
+    // Preserve Fallout's native animation, pathing, collision, scripts, and
+    // movement semantics. The analog stick supplies only camera-relative
+    // intent; it never moves the player through continuous world coordinates.
+    if (register_begin(ANIMATION_REQUEST_RESERVED) == 0) {
+        register_object_move_to_tile(
+            obj_dude,
+            destination,
+            obj_dude->elevation,
+            -1,
+            0);
+        register_end();
+        gFirstPersonMoveTicks = now;
     }
 }
 
