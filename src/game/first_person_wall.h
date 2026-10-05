@@ -1,11 +1,41 @@
 #ifndef FALLOUT_GAME_FIRST_PERSON_WALL_H_
 #define FALLOUT_GAME_FIRST_PERSON_WALL_H_
 
+#include <algorithm>
 #include <cmath>
-#include <unordered_set>
 #include <vector>
 
 namespace fallout {
+
+enum class FirstPersonWallType {
+    NorthSouth = 0,
+    EastWest = 1,
+    NorthCorner = 2,
+    SouthCorner = 3,
+    EastCorner = 4,
+    WestCorner = 5,
+};
+
+// Fallout stores the wall-light type in the high bits of prototype
+// extendedFlags. Low action bits (for example 0x2000) must not affect
+// structural classification.
+inline FirstPersonWallType first_person_wall_type(unsigned int extendedFlags)
+{
+    switch (extendedFlags & 0xF8000000u) {
+    case 0x08000000u:
+        return FirstPersonWallType::EastWest;
+    case 0x10000000u:
+        return FirstPersonWallType::NorthCorner;
+    case 0x20000000u:
+        return FirstPersonWallType::SouthCorner;
+    case 0x40000000u:
+        return FirstPersonWallType::EastCorner;
+    case 0x80000000u:
+        return FirstPersonWallType::WestCorner;
+    default:
+        return FirstPersonWallType::NorthSouth;
+    }
+}
 
 struct FirstPersonWallSegment {
     double ax;
@@ -16,50 +46,75 @@ struct FirstPersonWallSegment {
     double u1;
 };
 
-// The caller supplies native tile neighbors and the established world mapping.
-// No camera or art inputs: turning and FRM padding cannot alter connectivity.
-template <typename NeighborAt, typename TileToWorld>
-std::vector<FirstPersonWallSegment> first_person_wall_segments(int tile,
-    int rotation, double worldX, double worldY,
-    const std::unordered_set<int>& wallTiles, NeighborAt neighborAt,
-    TileToWorld tileToWorld, int& neighborCount)
+// Structural wall geometry comes from the wall-light type encoded in the PRO,
+// not from object rotation, FRM dimensions, or whatever neighbors happen to be
+// camera-visible. The existing world mapping places north/south wall centers
+// on a straight Y chain. Consecutive east/west wall objects alternate by a
+// half-step in Y because of hex-column parity; shift them onto the shared wall
+// line before emitting the segment.
+inline std::vector<FirstPersonWallSegment> first_person_wall_segments(int tile,
+    FirstPersonWallType type, double worldX, double worldY)
 {
-    std::vector<FirstPersonWallSegment> segments;
-    neighborCount = 0;
-    double endDx = 0.0;
-    double endDy = 0.0;
-    for (int direction = 0; direction < 6; direction++) {
-        const int neighbor = neighborAt(tile, direction);
-        // The native API returns the input tile at the map boundary.
-        if (neighbor == tile || wallTiles.count(neighbor) == 0) {
-            continue;
-        }
-        double nx;
-        double ny;
-        tileToWorld(neighbor, &nx, &ny);
-        endDx = (nx - worldX) * 0.5;
-        endDy = (ny - worldY) * 0.5;
-        // Keep texture orientation consistent on opposite half-edges.
-        const bool positive = direction < 3;
-        segments.push_back({ worldX, worldY,
-            worldX + endDx, worldY + endDy,
-            0.5, positive ? 1.0 : 0.0 });
-        neighborCount++;
+    constexpr double kSqrt3Over2 = 0.8660254037844386;
+    constexpr double kEastWestHalfLength = kSqrt3Over2 * 0.5;
+    constexpr double kNorthSouthHalfLength = 0.5;
+
+    const bool oddColumn = (tile % 200 & 1) != 0;
+    const double eastWestY = worldY + (oddColumn ? 0.25 : -0.25);
+
+    auto horizontal = [worldX, eastWestY](double sign) {
+        return FirstPersonWallSegment {
+            worldX,
+            eastWestY,
+            worldX + sign * kEastWestHalfLength,
+            eastWestY,
+            sign < 0.0 ? 1.0 : 0.0,
+            0.5,
+        };
+    };
+    auto vertical = [worldX, eastWestY](double sign) {
+        return FirstPersonWallSegment {
+            worldX,
+            eastWestY,
+            worldX,
+            eastWestY + sign * kNorthSouthHalfLength,
+            sign < 0.0 ? 0.5 : 0.5,
+            sign < 0.0 ? 0.0 : 1.0,
+        };
+    };
+
+    switch (type) {
+    case FirstPersonWallType::NorthSouth:
+        return { {
+            worldX,
+            worldY - kNorthSouthHalfLength,
+            worldX,
+            worldY + kNorthSouthHalfLength,
+            0.0,
+            1.0,
+        } };
+    case FirstPersonWallType::EastWest:
+        return { {
+            worldX - kEastWestHalfLength,
+            eastWestY,
+            worldX + kEastWestHalfLength,
+            eastWestY,
+            0.0,
+            1.0,
+        } };
+    case FirstPersonWallType::NorthCorner:
+        // Vault map samples show this corner terminating an east/west run on
+        // its west side while turning toward increasing world Y.
+        return { horizontal(-1.0), vertical(1.0) };
+    case FirstPersonWallType::SouthCorner:
+        return { horizontal(1.0), vertical(-1.0) };
+    case FirstPersonWallType::EastCorner:
+        return { horizontal(-1.0), vertical(-1.0) };
+    case FirstPersonWallType::WestCorner:
+        return { horizontal(1.0), vertical(1.0) };
     }
-    if (neighborCount == 1) {
-        const double endU = 1.0 - segments.front().u1;
-        segments.push_back({ worldX, worldY,
-            worldX - endDx, worldY - endDy, 0.5, endU });
-    } else if (neighborCount == 0) {
-        // Rotation is only a provisional structural fallback for isolated
-        // pieces. FRM anchors and opaque width must not change the footprint.
-        const double angle = -3.14159265358979323846 / 6.0 + (rotation % 3) * 3.14159265358979323846 / 3.0;
-        const double dx = std::cos(angle) * 0.5;
-        const double dy = std::sin(angle) * 0.5;
-        segments.push_back({ worldX - dx, worldY - dy,
-            worldX + dx, worldY + dy, 0.0, 1.0 });
-    }
-    return segments;
+
+    return {};
 }
 
 // Interpolate UVs together with camera-space coordinates at the near plane.
