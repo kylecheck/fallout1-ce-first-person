@@ -121,7 +121,7 @@ int main()
 
     // Unknown/custom types retain deterministic fallback geometry.
     {
-        const auto fallback = segments(tile, 0x18000000u, 2);
+        const auto fallback = segments(20100, 0x18000000u, 2);
         assert(fallback.size() == 1);
         assert(close(std::hypot(fallback[0].bx - fallback[0].ax,
                          fallback[0].by - fallback[0].ay),
