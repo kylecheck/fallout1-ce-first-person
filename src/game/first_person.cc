@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <utility>
 #include <vector>
 
 #include "game/art.h"
@@ -549,6 +550,31 @@ void first_person_render()
         });
     }
 
+    // Door scenery is semantic opening data. Never synthesize a structural
+    // blocker bridge through a tile occupied by a door; closed/open state will
+    // be handled by the scenery renderer instead of being baked into walls.
+    std::vector<int> doorTiles;
+    for (Object* object = obj_find_first_at(map_elevation);
+         object != nullptr;
+         object = obj_find_next_at()) {
+        if (object->tile < 0
+            || FID_TYPE(object->fid) != OBJ_TYPE_SCENERY) {
+            continue;
+        }
+
+        Proto* proto = nullptr;
+        if (PID_TYPE(object->pid) == OBJ_TYPE_SCENERY
+            && proto_ptr(object->pid, &proto) == 0
+            && proto != nullptr
+            && proto->scenery.type == SCENERY_TYPE_DOOR) {
+            doorTiles.push_back(object->tile);
+        }
+    }
+
+    auto doorAtTile = [&doorTiles](int tile) {
+        return std::find(doorTiles.begin(), doorTiles.end(), tile) != doorTiles.end();
+    };
+
     // Promote only blocker cells that form a proven bridge between visible
     // wall structure. This recovers spans such as VAULTBUR 13090 -> 13290
     // (block.frm) -> 13490 without turning every collision helper into a wall.
@@ -599,6 +625,9 @@ void first_person_render()
     auto traceBridgeEnd = [&](int startTile, int delta, bool vertical) -> WallBridgeEnd {
         int tile = startTile + delta;
         for (int step = 1; step <= 6; step++, tile += delta) {
+            if (doorAtTile(tile)) {
+                break;
+            }
             const FirstPersonWallSprite* candidate = wallAtTile(tile);
             if (candidate != nullptr) {
                 const FirstPersonWallKind kind =
@@ -618,6 +647,9 @@ void first_person_render()
     };
 
     for (const FirstPersonWallSprite& block : blockWallHints) {
+        if (doorAtTile(block.tile)) {
+            continue;
+        }
         const WallBridgeEnd verticalA = traceBridgeEnd(block.tile, -200, true);
         const WallBridgeEnd verticalB = traceBridgeEnd(block.tile, 200, true);
         const WallBridgeEnd horizontalA = traceBridgeEnd(block.tile, -1, false);
