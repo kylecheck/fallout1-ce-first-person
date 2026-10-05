@@ -25,6 +25,7 @@
 #include "game/tile.h"
 #include "game/object.h"
 #include "game/proto.h"
+#include "game/stat.h"
 #include "plib/color/color.h"
 #include "plib/gnw/gnw.h"
 #include "plib/gnw/grbuf.h"
@@ -218,6 +219,25 @@ void first_person_turn(int steps)
     gFirstPersonCameraRevision++;
     gFirstPersonPicks.clear();
     gFirstPersonInteractionPicks.clear();
+}
+
+bool first_person_controller_move_active()
+{
+    if (!gFirstPersonEnabled || gFirstPersonController == nullptr) {
+        return false;
+    }
+
+    const Sint16 rawX = SDL_GameControllerGetAxis(
+        gFirstPersonController,
+        SDL_CONTROLLER_AXIS_LEFTX);
+    const Sint16 rawY = SDL_GameControllerGetAxis(
+        gFirstPersonController,
+        SDL_CONTROLLER_AXIS_LEFTY);
+
+    const double x = rawX >= 0 ? rawX / 32767.0 : rawX / 32768.0;
+    const double y = rawY >= 0 ? rawY / 32767.0 : rawY / 32768.0;
+    constexpr double kMoveDeadZone = 0.32;
+    return std::sqrt(x * x + y * y) >= kMoveDeadZone;
 }
 
 void first_person_update()
@@ -2078,6 +2098,96 @@ void first_person_render()
                 }
             }
         }
+    }
+
+    // Persistent first-person HUD. Keep it intentionally compact: mirror
+    // native character/weapon state without replacing Fallout's systems.
+    {
+        const int oldFont = text_curr();
+        text_font(101);
+        const int lineHeight = text_height();
+        const int padding = 4;
+        const int hudColor = colorTable[992];
+
+        char leftHud[64];
+        const int hp = critter_get_hits(obj_dude);
+        const int maxHp = stat_level(obj_dude, STAT_MAXIMUM_HIT_POINTS);
+        std::snprintf(leftHud, sizeof(leftHud), "HP %d/%d", hp, maxHp);
+
+        int hitMode = 0;
+        bool aiming = false;
+        Object* weapon = nullptr;
+        int ammo = -1;
+        int ammoMax = -1;
+        if (intface_get_attack(&hitMode, &aiming) == 0) {
+            weapon = item_hit_with(obj_dude, hitMode);
+            if (weapon != nullptr) {
+                ammoMax = item_w_max_ammo(weapon);
+                if (ammoMax > 0) {
+                    ammo = item_w_curr_ammo(weapon);
+                }
+            }
+        }
+
+        char rightHud[96];
+        if (ammoMax > 0) {
+            std::snprintf(
+                rightHud,
+                sizeof(rightHud),
+                isInCombat() ? "AP %d  AMMO %d/%d" : "AMMO %d/%d",
+                isInCombat() ? obj_dude->data.critter.combat.ap : ammo,
+                isInCombat() ? ammo : ammoMax,
+                isInCombat() ? ammoMax : 0);
+            if (!isInCombat()) {
+                std::snprintf(rightHud, sizeof(rightHud), "AMMO %d/%d", ammo, ammoMax);
+            }
+        } else if (isInCombat()) {
+            std::snprintf(
+                rightHud,
+                sizeof(rightHud),
+                "AP %d",
+                obj_dude->data.critter.combat.ap);
+        } else {
+            rightHud[0] = '\0';
+        }
+
+        const int leftWidth = text_width(leftHud) + padding * 2;
+        const int panelHeight = lineHeight + padding * 2;
+        if (leftWidth > 0 && panelHeight > 0) {
+            const int top = std::max(0, height - panelHeight - 6);
+            buf_fill(
+                buffer + top * width,
+                std::min(leftWidth, width),
+                panelHeight,
+                width,
+                colorTable[0]);
+            text_to_buf(
+                buffer + (top + padding) * width + padding,
+                leftHud,
+                std::max(0, leftWidth - padding * 2),
+                width,
+                hudColor);
+        }
+
+        if (rightHud[0] != '\0') {
+            const int rightWidth = text_width(rightHud) + padding * 2;
+            const int left = std::max(0, width - rightWidth);
+            const int top = std::max(0, height - panelHeight - 6);
+            buf_fill(
+                buffer + top * width + left,
+                std::min(rightWidth, width - left),
+                panelHeight,
+                width,
+                colorTable[0]);
+            text_to_buf(
+                buffer + (top + padding) * width + left + padding,
+                rightHud,
+                std::max(0, rightWidth - padding * 2),
+                width,
+                hudColor);
+        }
+
+        text_font(oldFont);
     }
 
     // First-person mode/combat presentation. Native Fallout remains the
