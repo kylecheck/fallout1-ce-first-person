@@ -669,3 +669,17 @@ Eye-height calibration was nudged again from 0.62 to 0.68 world units after
 runtime testing against Vault window sightlines. This keeps the camera clearly
 above the earlier crouched-looking perspective without materially changing the
 established world scale.
+
+
+## First-person redraw path optimization
+
+Controller camera motion now redraws the full-screen first-person presentation
+window directly instead of forcing each right-stick sample through Fallout's
+isometric `tile_refresh_display` path. The map draw callback also stops
+redrawing the hidden isometric display window underneath the first-person
+overlay.
+
+This removes redundant dirty-rect/compositing work from continuous camera
+motion and is intended to address the slideshow-like feel observed while
+turning. Native simulation and map refreshes still remain authoritative for
+world changes and movement.
