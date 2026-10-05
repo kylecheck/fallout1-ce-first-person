@@ -73,6 +73,7 @@ struct FirstPersonDoorSprite {
     double worldX;
     double worldY;
     bool portal = false;
+    bool damagedPanel = false;
 };
 
 struct FirstPersonObjectSprite {
@@ -647,17 +648,18 @@ void first_person_render()
 
         char sceneryArt[64] = { 0 };
         art_get_base_name(OBJ_TYPE_SCENERY, object->fid & 0xFFF, sceneryArt);
-        if (std::strcmp(sceneryArt, "v13secr6.frm") == 0
+        const bool damagedPanel = std::strcmp(sceneryArt, "v13secr4.frm") == 0;
+        if ((std::strcmp(sceneryArt, "v13secr6.frm") == 0 || damagedPanel)
             && (object->flags & OBJECT_HIDDEN) == 0
             && tile_dist(obj_dude->tile, object->tile) <= 18) {
             double worldX;
             double worldY;
             tileToWorld(object->tile, &worldX, &worldY);
-            // This verified generic frame spans five wall-lattice columns.
-            // It is scenery, not an animated native door or collision object.
+            // Verified generic structural scenery. Keep its native object and
+            // blockers; only its visual representation changes here.
             doors.push_back({ object, object->fid, object->frame,
                 ((object->rotation % ROTATION_COUNT) + ROTATION_COUNT) % ROTATION_COUNT,
-                object->tile, 0x08000000u, worldX, worldY, true });
+                object->tile, 0x08000000u, worldX, worldY, true, damagedPanel });
         }
 
         Proto* proto = nullptr;
@@ -1219,21 +1221,32 @@ void first_person_render()
             ArtFrame* frame = frame_ptr(art, number, door.direction);
             unsigned char* source = art_frame_data(art, number, door.direction);
             if (frame != nullptr && source != nullptr && frame->width > 0 && frame->height > 0) {
-                portalMaterial.width = frame->width;
-                portalMaterial.height = std::max(1, frame->height * 112 / 142);
+                portalMaterial.width = door.damagedPanel
+                    ? std::max(1, frame->width * 302 / 342) : frame->width;
+                portalMaterial.height = std::max(1, door.damagedPanel
+                    ? frame->height * 105 / 223 : frame->height * 112 / 142);
                 portalMaterial.pixels.resize(static_cast<size_t>(portalMaterial.width)
                     * portalMaterial.height, 0);
-                // The verified 151x142 FRM has a top rising from y=36 to y=0.
-                // Undo that column shear without filling the transparent hole.
-                // Scale the profile with the live frame dimensions.
+                // Asset-specific front-face profiles from the exported native art.
+                // The damaged 342x223 panel includes a side, top caps and
+                // ground rubble: crop to x=40..341, y=91..28 + 105 rows.
+                // Preserve index-zero damage. Do not flatten every opaque
+                // column: that would drag broken edges down into the hole.
+                // The arch keeps its established 151x142 profile.
                 for (int x = 0; x < portalMaterial.width; x++) {
                     const double u = x / static_cast<double>(std::max(1, portalMaterial.width - 1));
-                    const double top = frame->height * (36.0 / 142.0) * (1.0 - u);
+                    const double top = door.damagedPanel
+                        ? frame->height * ((91.0 - 63.0 * u) / 223.0)
+                        : frame->height * (36.0 / 142.0) * (1.0 - u);
+                    const int sx = door.damagedPanel
+                        ? std::clamp(static_cast<int>(std::lround(
+                            frame->width * (40.0 + 301.0 * u) / 342.0)),
+                            0, frame->width - 1) : x;
                     for (int y = 0; y < portalMaterial.height; y++) {
                         const int sy = static_cast<int>(std::lround(top + y));
                         if (sy >= 0 && sy < frame->height) {
                             portalMaterial.pixels[y * portalMaterial.width + x] =
-                                source[sy * frame->width + x];
+                                source[sy * frame->width + sx];
                         }
                     }
                 }
@@ -1256,11 +1269,13 @@ void first_person_render()
 
         if (door.portal) {
             // Preserve the existing parity-corrected wall line. Enlarge only
-            // this scenery plane to the verified five-column footprint.
+            // this scenery plane. The arch spans five columns; the damaged
+            // section spans eight intervals between its surrounding wall lines.
             for (FirstPersonWallSegment& segment : doorSegments) {
                 const double centerX = (segment.ax + segment.bx) * 0.5;
-                segment.ax = centerX + (segment.ax - centerX) * 5.0;
-                segment.bx = centerX + (segment.bx - centerX) * 5.0;
+                const double columns = door.damagedPanel ? 8.0 : 5.0;
+                segment.ax = centerX + (segment.ax - centerX) * columns;
+                segment.bx = centerX + (segment.bx - centerX) * columns;
             }
         }
         const double planeHeight = door.portal ? kStructuralWallHeight : kDoorHeight;
@@ -1292,7 +1307,8 @@ void first_person_render()
                 // alpha up the column so arched trim is not turned into a box.
                 const int row = material->height * 4 / 5;
                 const int middle = material->width / 2;
-                if (material->width > 2 && material->pixels[row * material->width + middle] == 0) {
+                if (!door.damagedPanel && material->width > 2
+                    && material->pixels[row * material->width + middle] == 0) {
                     int left = middle;
                     int right = middle;
                     while (left > 0 && material->pixels[row * material->width + left - 1] == 0) left--;
@@ -1433,7 +1449,8 @@ void first_person_render()
             char artName[64] = { 0 };
             if (art_get_base_name(type, object->fid & 0xFFF, artName) == 0
                 && (std::strcmp(artName, "block.frm") == 0
-                    || std::strcmp(artName, "v13secr6.frm") == 0)) {
+                    || std::strcmp(artName, "v13secr6.frm") == 0
+                    || std::strcmp(artName, "v13secr4.frm") == 0)) {
                 continue;
             }
             Proto* sceneryProto = nullptr;

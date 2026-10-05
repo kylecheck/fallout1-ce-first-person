@@ -423,3 +423,33 @@ export added in the preceding build will supply them for structural conversion.
 The modified source passes the warning-clean compiler syntax check. Existing
 wall, doorway, and material regression suites pass. New depth and grounding
 behavior requires in-game visual testing against the user's assets.
+
+
+### Damaged wall scenery: first structural pass
+
+The full-elevation `fallout-depth-test.txt.art.txt` export contains 121 unique
+frames, including `v13secr4.frm` (342x223). Unlike the clean arch, this art
+combines a damaged wall, a side face, top caps and floor rubble. It must not
+be rectified by treating its complete opaque silhouette as one wall face.
+
+The first pass crops its front face to source columns 40..341, sampling from
+source row 91 at the left to 28 at the right, for 105 vertical pixels. Index
+zero remains transparent, including the damage. The crop removes the major
+baked side/floor silhouette; small attached debris remains in the face.
+It uses the existing structural scenery depth/pick pass, two thin faces and
+outer returns, and is excluded from camera-facing billboards.
+
+Its provisional horizontal span is eight lattice column intervals, centered
+on the native object. In the exported room this places the ends on columns
+92 and 100 around the object at column 96. This is an asset-specific visual
+profile, not a change to world coordinates or blocker reconstruction. Verify
+both end joins and front/back alignment on Deck before calling it complete.
+The full broken side, top surfaces and separate floor rubble are deferred;
+this pass does not claim to reconstruct the complete original solid.
+Native blockers, scripts, collision and object state remain untouched. Picking
+opaque pixels returns the original scenery object; the hole writes no depth
+or pick entry. No passage or new gameplay is inferred from the visual hole.
+
+Validation: strict C++17 syntax compilation and existing wall lattice,
+doorway and material regressions passed. The cropped source face was inspected
+visually; room placement still requires an in-game test.
