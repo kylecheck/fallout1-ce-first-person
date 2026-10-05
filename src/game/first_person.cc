@@ -33,6 +33,8 @@
 namespace fallout {
 
 static bool gFirstPersonEnabled = false;
+static int gFirstPersonWindow = -1;
+static bool gFirstPersonRestoreInterface = false;
 // Camera heading is measured in 15-degree units, but stored continuously so
 // controller look can move smoothly between the 24 keyboard/tap headings.
 // Native Fallout movement still resolves to the nearest one of its 6 hex
@@ -121,16 +123,57 @@ bool first_person_is_enabled()
     return gFirstPersonEnabled;
 }
 
+int first_person_window()
+{
+    if (gFirstPersonEnabled && gFirstPersonWindow != -1) {
+        return gFirstPersonWindow;
+    }
+
+    return display_win;
+}
+
 void first_person_toggle()
 {
     gFirstPersonEnabled = !gFirstPersonEnabled;
-    if (gFirstPersonEnabled && obj_dude != nullptr) {
-        const int nativeRotation = ((obj_dude->rotation % ROTATION_COUNT)
-            + ROTATION_COUNT) % ROTATION_COUNT;
-        gFirstPersonHeading = nativeRotation * 4.0;
-        gFirstPersonPitchDegrees = 0.0;
-        gFirstPersonCameraRevision++;
+
+    if (gFirstPersonEnabled) {
+        if (gFirstPersonWindow == -1) {
+            gFirstPersonWindow = win_add(
+                0,
+                0,
+                screenGetWidth(),
+                screenGetHeight(),
+                colorTable[0],
+                WINDOW_HIDDEN | WINDOW_MOVE_ON_TOP);
+        }
+
+        gFirstPersonRestoreInterface = !intface_is_hidden();
+        if (gFirstPersonRestoreInterface) {
+            intface_hide();
+        }
+
+        if (gFirstPersonWindow != -1) {
+            win_show(gFirstPersonWindow);
+        }
+
+        if (obj_dude != nullptr) {
+            const int nativeRotation = ((obj_dude->rotation % ROTATION_COUNT)
+                + ROTATION_COUNT) % ROTATION_COUNT;
+            gFirstPersonHeading = nativeRotation * 4.0;
+            gFirstPersonPitchDegrees = 0.0;
+            gFirstPersonCameraRevision++;
+        }
+    } else {
+        if (gFirstPersonWindow != -1) {
+            win_hide(gFirstPersonWindow);
+        }
+
+        if (gFirstPersonRestoreInterface) {
+            intface_show();
+        }
+        gFirstPersonRestoreInterface = false;
     }
+
     gFirstPersonPicks.clear();
     gFirstPersonInteractionPicks.clear();
 }
@@ -286,15 +329,16 @@ static void first_person_update_controller_look()
 // viewport-local coordinates. Keep a single conversion for highlight and input.
 int first_person_target_tile(int screenX, int screenY)
 {
-    if (!gFirstPersonEnabled || obj_dude == nullptr || display_win == -1) {
+    const int viewWindow = first_person_window();
+    if (!gFirstPersonEnabled || obj_dude == nullptr || viewWindow == -1) {
         return -1;
     }
     Rect rect;
-    if (win_get_rect(display_win, &rect) != 0) {
+    if (win_get_rect(viewWindow, &rect) != 0) {
         return -1;
     }
-    const int width = win_width(display_win);
-    const int height = win_height(display_win);
+    const int width = win_width(viewWindow);
+    const int height = win_height(viewWindow);
     const int x = screenX - rect.ulx;
     const int y = screenY - rect.uly;
     if (width <= 0 || height <= 0) {
@@ -326,15 +370,16 @@ int first_person_target_tile(int screenX, int screenY)
 
 Object* first_person_object_at(int screenX, int screenY, int objectType, bool includeDude, int elevation)
 {
-    if (!gFirstPersonEnabled || obj_dude == nullptr || display_win == -1
+    const int viewWindow = first_person_window();
+    if (!gFirstPersonEnabled || obj_dude == nullptr || viewWindow == -1
         || elevation != map_elevation || elevation != gPickElevation
         || obj_dude->tile != gPickTile || gFirstPersonCameraRevision != gPickRotation
-        || gPickWidth != win_width(display_win) || gPickHeight != win_height(display_win)
+        || gPickWidth != win_width(viewWindow) || gPickHeight != win_height(viewWindow)
         || gFirstPersonPicks.empty() || gFirstPersonInteractionPicks.empty()) {
         return nullptr;
     }
     Rect rect;
-    if (win_get_rect(display_win, &rect) != 0) {
+    if (win_get_rect(viewWindow, &rect) != 0) {
         return nullptr;
     }
     const int x = screenX - rect.ulx;
@@ -577,17 +622,18 @@ static void first_person_dump_map()
 
 void first_person_render()
 {
-    if (!gFirstPersonEnabled || obj_dude == nullptr || display_win == -1) {
+    const int viewWindow = first_person_window();
+    if (!gFirstPersonEnabled || obj_dude == nullptr || viewWindow == -1) {
         return;
     }
 
-    unsigned char* buffer = win_get_buf(display_win);
+    unsigned char* buffer = win_get_buf(viewWindow);
     if (buffer == nullptr) {
         return;
     }
 
-    const int width = win_width(display_win);
-    const int height = win_height(display_win);
+    const int width = win_width(viewWindow);
+    const int height = win_height(viewWindow);
     if (width <= 0 || height <= 0) {
         return;
     }
@@ -2177,6 +2223,10 @@ void first_person_render()
 
     draw_line(buffer, width, width / 2 - 7, height / 2, width / 2 + 7, height / 2, crosshairColor);
     draw_line(buffer, width, width / 2, height / 2 - 7, width / 2, height / 2 + 7, crosshairColor);
+
+    if (viewWindow != display_win) {
+        win_draw(viewWindow);
+    }
 }
 
 } // namespace fallout
