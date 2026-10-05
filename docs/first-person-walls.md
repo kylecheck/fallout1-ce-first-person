@@ -187,3 +187,30 @@ This is intentionally stricter than the old adjacency approach: raw neighboring
 objects still do not define wall topology. Blockers are used only as evidence
 for a missing span when visible wall structure proves the same axis on both
 sides.
+
+
+## Wall-finish material pass
+
+The wall renderer now treats corner appearance separately from corner
+structure.
+
+Straight wall FRMs are rectified with a center-preserving scanline transform:
+each source row is aligned by its opaque center and only the narrowed isometric
+silhouette is edge-extended. This avoids independently stretching every row,
+which was producing striped/checkered distortion in first person.
+
+Corner geometry still comes from the corner prototype class, but each corner
+arm now looks for the straight wall that continues that arm. When found, the
+arm borrows that straight wall's rectified material and maps the full texture
+across the face. The corner FRM is retained only as a fallback. This keeps
+corners visually continuous with the walls they actually join.
+
+All structural wall planes now use one nominal world height (1.65) instead of
+deriving physical height from FRM pixel dimensions. The source FRM height was
+an isometric-art dimension, not reliable 3D geometry, and caused uneven wall
+tops.
+
+Blocker-backed bridges are also door-aware. If a blocker trace encounters a
+scenery prototype of type `SCENERY_TYPE_DOOR`, the bridge is rejected so a
+semantic doorway cannot be permanently sealed by reconstructed wall geometry.
+Door open/closed presentation remains a scenery/rendering task.
