@@ -158,3 +158,32 @@ compositor.
 
 The rectified material is precomputed once per visible wall object per frame,
 instead of searching for replacement texels for every projected screen pixel.
+
+
+## Blocker-backed structural bridges
+
+Some Fallout maps use `block.frm` wall objects as invisible collision/topology
+cells between visible wall sprites. In VAULTBUR, for example, the visible west
+corner at tile 13090 is followed by a `block.frm` wall at 13290 and then a
+visible north/south wall at 13490. Ignoring the blocker leaves a real
+first-person hole even though the original isometric scene reads as continuous.
+
+The first-person renderer now treats blocker cells as topology hints rather
+than renderable art:
+
+- `block.frm` itself is never textured or exposed as an interactable object
+- from each blocker cell, trace both directions along the vertical (+/-200)
+  and horizontal (+/-1) structural axes
+- a blocker is promoted to synthetic wall geometry only when both directions
+  reach compatible visible wall structure while passing exclusively through
+  other blocker cells
+- the synthetic span inherits its material from a real wall at one end
+- if a helper qualifies on both axes, choose the shorter proven bridge rather
+  than inventing a four-way intersection
+- tracing is capped at six cells so unrelated collision fields cannot connect
+  distant rooms
+
+This is intentionally stricter than the old adjacency approach: raw neighboring
+objects still do not define wall topology. Blockers are used only as evidence
+for a missing span when visible wall structure proves the same axis on both
+sides.
