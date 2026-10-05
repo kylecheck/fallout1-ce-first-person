@@ -6,7 +6,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <unordered_set>
 #include <vector>
 
 #include "game/art.h"
@@ -44,6 +43,7 @@ struct FirstPersonWallSprite {
     int fid;
     int direction;
     int tile;
+    FirstPersonWallType wallType;
     double worldX;
     double worldY;
 };
@@ -459,8 +459,25 @@ void first_person_render()
 
     // Debug geometry uses the same clipping/depth path as textured walls.
     static const bool debugWalls = std::getenv("FALLOUT_FP_WALL_DEBUG") != nullptr;
+    auto debugWallColor = [](FirstPersonWallType type) {
+        switch (type) {
+        case FirstPersonWallType::NorthSouth:
+            return 31744; // red
+        case FirstPersonWallType::EastWest:
+            return 992; // green
+        case FirstPersonWallType::NorthCorner:
+            return 31; // blue
+        case FirstPersonWallType::SouthCorner:
+            return 32736; // yellow
+        case FirstPersonWallType::EastCorner:
+            return 31775; // magenta
+        case FirstPersonWallType::WestCorner:
+            return 1023; // cyan
+        }
+        return 31744;
+    };
+
     std::vector<FirstPersonWallSprite> walls;
-    std::unordered_set<int> wallTiles;
     for (Object* wall = obj_find_first_at(map_elevation);
          wall != nullptr;
          wall = obj_find_next_at()) {
@@ -469,12 +486,13 @@ void first_person_render()
             || wall->tile >= kHexGridWidth * kHexGridWidth
             || (wall->flags & OBJECT_HIDDEN) != 0
             || FID_TYPE(wall->fid) != OBJ_TYPE_WALL
-            || tile_dist(obj_dude->tile, wall->tile) > 19) {
+            || tile_dist(obj_dude->tile, wall->tile) > 18) {
             continue;
         }
 
-        // block.frm is Fallout's 1x1 invisible collision wall. It belongs in
-        // future collision handling, not in the visible first-person scene.
+        // block.frm is Fallout's 1x1 invisible collision/helper wall. Keep it
+        // out of visible geometry; the map dump shows these pieces densely
+        // tracing collision around otherwise visible walls and scenery.
         const int frmId = wall->fid & 0xFFF;
         char artName[64] = { 0 };
         if (art_get_base_name(OBJ_TYPE_WALL, frmId, artName) == -1
@@ -482,27 +500,37 @@ void first_person_render()
             continue;
         }
 
+        unsigned int extendedFlags = 0;
+        Proto* proto = nullptr;
+        if (PID_TYPE(wall->pid) == OBJ_TYPE_WALL
+            && proto_ptr(wall->pid, &proto) == 0
+            && proto != nullptr) {
+            extendedFlags = static_cast<unsigned int>(proto->wall.extendedFlags);
+        }
+
         double wallWorldX;
         double wallWorldY;
         tileToWorld(wall->tile, &wallWorldX, &wallWorldY);
         const int direction = ((wall->rotation % ROTATION_COUNT) + ROTATION_COUNT) % ROTATION_COUNT;
-        walls.push_back({ wall, wall->fid, direction, wall->tile, wallWorldX, wallWorldY });
-        wallTiles.insert(wall->tile);
+        walls.push_back({
+            wall,
+            wall->fid,
+            direction,
+            wall->tile,
+            first_person_wall_type(extendedFlags),
+            wallWorldX,
+            wallWorldY,
+        });
     }
 
-    // One extra ring supplies neighbors for every rendered tile (radius 18).
-    // Each object owns the half-edge to each occupied native neighbor. Both
-    // halves meet at the same midpoint, including bends and junctions. No
-    // floating-point distance voting or view-dependent topology is involved.
+    // Structural direction comes from each wall prototype's Wall Light Type.
+    // Native hex adjacency is intentionally not treated as connectivity: the
+    // diagnostic VAULTBUR map showed ordinary straight runs surrounded by
+    // adjacent blocker/decorative cells, which created false zigzags and
+    // three/four-way junctions in the previous topology pass.
     for (const FirstPersonWallSprite& wall : walls) {
-        if (tile_dist(obj_dude->tile, wall.tile) > 18) {
-            continue;
-        }
-        int neighborCount;
-        const auto segments = first_person_wall_segments(wall.tile, wall.direction,
-            wall.worldX, wall.worldY, wallTiles,
-            [](int tile, int direction) { return tile_num_in_direction(tile, direction, 1); },
-            tileToWorld, neighborCount);
+        const auto segments = first_person_wall_segments(
+            wall.tile, wall.wallType, wall.worldX, wall.worldY);
 
         CacheEntry* cacheEntry = nullptr;
         ArtFrame* frame = nullptr;
@@ -626,7 +654,7 @@ void first_person_render()
                         opaqueMinY,
                         opaqueMaxY);
                     const unsigned char pixel = debugWalls
-                        ? colorTable[neighborCount == 0 ? 31744 : (neighborCount > 2 ? 32736 : 992)]
+                        ? colorTable[debugWallColor(wall.wallType)]
                         : pixels[sourceY * frame->width + sourceX];
                     if (pixel == 0) {
                         continue;
