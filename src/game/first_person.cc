@@ -11,6 +11,8 @@
 #include <utility>
 #include <vector>
 
+#include <SDL.h>
+
 #include "game/art.h"
 #include "game/combat.h"
 #include "game/critter.h"
@@ -31,9 +33,14 @@
 namespace fallout {
 
 static bool gFirstPersonEnabled = false;
-// 24 presentation headings around the circle (15 degrees each). Native
-// Fallout movement still resolves to the nearest one of its 6 hex directions.
-static int gFirstPersonHeading = 0;
+// Camera heading is measured in 15-degree units, but stored continuously so
+// controller look can move smoothly between the 24 keyboard/tap headings.
+// Native Fallout movement still resolves to the nearest one of its 6 hex
+// directions.
+static double gFirstPersonHeading = 0.0;
+static int gFirstPersonCameraRevision = 0;
+static SDL_GameController* gFirstPersonController = nullptr;
+static Uint64 gFirstPersonControllerTicks = 0;
 
 // Pick IDs are written only when a visible scene pixel wins the depth test.
 // Resolve against live map objects before returning; never dereference cached
@@ -51,7 +58,7 @@ static std::vector<FirstPersonPick> gFirstPersonInteractionPicks;
 static int gPickWidth = 0;
 static int gPickHeight = 0;
 static int gPickTile = -1;
-static int gPickRotation = -1;
+static int gPickRotation = -1; // camera revision for pick-buffer validity
 static int gPickElevation = -1;
 
 // Structural inputs are collected before any camera-space clipping.
@@ -119,7 +126,8 @@ void first_person_toggle()
     if (gFirstPersonEnabled && obj_dude != nullptr) {
         const int nativeRotation = ((obj_dude->rotation % ROTATION_COUNT)
             + ROTATION_COUNT) % ROTATION_COUNT;
-        gFirstPersonHeading = nativeRotation * 4;
+        gFirstPersonHeading = nativeRotation * 4.0;
+        gFirstPersonCameraRevision++;
     }
     gFirstPersonPicks.clear();
     gFirstPersonInteractionPicks.clear();
@@ -129,15 +137,18 @@ void first_person_toggle()
 // Native movement remains free to rotate the character at every hex step.
 int first_person_heading()
 {
-    return gFirstPersonHeading;
+    constexpr int kHeadingCount = ROTATION_COUNT * 4;
+    int heading = static_cast<int>(std::lround(gFirstPersonHeading));
+    return ((heading % kHeadingCount) + kHeadingCount) % kHeadingCount;
 }
 
 int first_person_rotation()
 {
-    // Round the 24-step presentation heading to the nearest native 60-degree
-    // hex direction. This keeps Fallout pathing/collision authoritative while
-    // allowing the camera to look between hex axes.
-    return ((gFirstPersonHeading + 2) / 4) % ROTATION_COUNT;
+    // Round the continuous presentation heading to the nearest native
+    // 60-degree hex direction. Fallout pathing/collision remains authoritative
+    // even while the view freely looks between those axes.
+    int rotation = static_cast<int>(std::lround(gFirstPersonHeading / 4.0));
+    return ((rotation % ROTATION_COUNT) + ROTATION_COUNT) % ROTATION_COUNT;
 }
 
 void first_person_turn(int steps)
@@ -145,9 +156,91 @@ void first_person_turn(int steps)
     if (!gFirstPersonEnabled) {
         return;
     }
-    constexpr int kHeadingCount = ROTATION_COUNT * 4;
-    gFirstPersonHeading = ((gFirstPersonHeading + steps % kHeadingCount)
-        % kHeadingCount + kHeadingCount) % kHeadingCount;
+
+    constexpr double kHeadingCount = ROTATION_COUNT * 4.0;
+    gFirstPersonHeading = std::fmod(gFirstPersonHeading + steps, kHeadingCount);
+    if (gFirstPersonHeading < 0.0) {
+        gFirstPersonHeading += kHeadingCount;
+    }
+
+    gFirstPersonCameraRevision++;
+    gFirstPersonPicks.clear();
+    gFirstPersonInteractionPicks.clear();
+}
+
+static void first_person_update_controller_look()
+{
+    if (!gFirstPersonEnabled) {
+        return;
+    }
+
+    if ((SDL_WasInit(SDL_INIT_GAMECONTROLLER) & SDL_INIT_GAMECONTROLLER) == 0) {
+        if (SDL_InitSubSystem(SDL_INIT_GAMECONTROLLER) != 0) {
+            return;
+        }
+    }
+
+    if (gFirstPersonController == nullptr
+        || !SDL_GameControllerGetAttached(gFirstPersonController)) {
+        if (gFirstPersonController != nullptr) {
+            SDL_GameControllerClose(gFirstPersonController);
+            gFirstPersonController = nullptr;
+        }
+
+        for (int index = 0; index < SDL_NumJoysticks(); index++) {
+            if (SDL_IsGameController(index)) {
+                gFirstPersonController = SDL_GameControllerOpen(index);
+                if (gFirstPersonController != nullptr) {
+                    break;
+                }
+            }
+        }
+    }
+
+    const Uint64 now = SDL_GetTicks64();
+    if (gFirstPersonControllerTicks == 0) {
+        gFirstPersonControllerTicks = now;
+        return;
+    }
+
+    const double dt = std::min(
+        0.05,
+        static_cast<double>(now - gFirstPersonControllerTicks) / 1000.0);
+    gFirstPersonControllerTicks = now;
+
+    if (gFirstPersonController == nullptr || dt <= 0.0) {
+        return;
+    }
+
+    const Sint16 rawAxis = SDL_GameControllerGetAxis(
+        gFirstPersonController,
+        SDL_CONTROLLER_AXIS_RIGHTX);
+    double axis = rawAxis >= 0
+        ? rawAxis / 32767.0
+        : rawAxis / 32768.0;
+
+    constexpr double kDeadZone = 0.18;
+    if (std::abs(axis) <= kDeadZone) {
+        return;
+    }
+
+    // Remove the dead-zone discontinuity while preserving full stick travel.
+    axis = std::copysign(
+        (std::abs(axis) - kDeadZone) / (1.0 - kDeadZone),
+        axis);
+
+    // Heading units are 15 degrees. About 150 degrees/sec at full deflection
+    // gives useful room scanning without making fine aim excessively twitchy.
+    constexpr double kHeadingUnitsPerSecond = 10.0;
+    constexpr double kHeadingCount = ROTATION_COUNT * 4.0;
+    gFirstPersonHeading = std::fmod(
+        gFirstPersonHeading + axis * kHeadingUnitsPerSecond * dt,
+        kHeadingCount);
+    if (gFirstPersonHeading < 0.0) {
+        gFirstPersonHeading += kHeadingCount;
+    }
+
+    gFirstPersonCameraRevision++;
     gFirstPersonPicks.clear();
     gFirstPersonInteractionPicks.clear();
 }
@@ -178,8 +271,7 @@ int first_person_target_tile(int screenX, int screenY)
     }
     const double cameraX = (x - width * 0.5) * z / focal;
     constexpr double pi = 3.14159265358979323846;
-    const int heading = first_person_heading();
-    const double yaw = -pi / 6.0 + heading * pi / 12.0;
+    const double yaw = -pi / 6.0 + gFirstPersonHeading * pi / 12.0;
     const double dx = -std::sin(yaw) * cameraX + std::cos(yaw) * z;
     const double dy = std::cos(yaw) * cameraX + std::sin(yaw) * z;
     int isoX;
@@ -196,7 +288,7 @@ Object* first_person_object_at(int screenX, int screenY, int objectType, bool in
 {
     if (!gFirstPersonEnabled || obj_dude == nullptr || display_win == -1
         || elevation != map_elevation || elevation != gPickElevation
-        || obj_dude->tile != gPickTile || first_person_heading() != gPickRotation
+        || obj_dude->tile != gPickTile || gFirstPersonCameraRevision != gPickRotation
         || gPickWidth != win_width(display_win) || gPickHeight != win_height(display_win)
         || gFirstPersonPicks.empty() || gFirstPersonInteractionPicks.empty()) {
         return nullptr;
@@ -462,10 +554,15 @@ void first_person_render()
 
     first_person_dump_map();
 
+    // Read the native controller independently of the Fallout mouse cursor.
+    // Steam Input can therefore expose the right stick as a gamepad axis while
+    // the right trackpad continues to emulate the real mouse.
+    first_person_update_controller_look();
+
     gPickWidth = width;
     gPickHeight = height;
     gPickTile = obj_dude->tile;
-    gPickRotation = first_person_heading();
+    gPickRotation = gFirstPersonCameraRevision;
     gPickElevation = map_elevation;
     gFirstPersonPicks.assign(static_cast<size_t>(width) * height, { nullptr, -1 });
     gFirstPersonInteractionPicks.assign(
@@ -501,8 +598,7 @@ void first_person_render()
     double playerWorldY;
     tileToWorld(obj_dude->tile, &playerWorldX, &playerWorldY);
 
-    const int heading = first_person_heading();
-    const double yaw = -kPi / 6.0 + heading * (kPi / 12.0);
+    const double yaw = -kPi / 6.0 + gFirstPersonHeading * (kPi / 12.0);
     const double forwardX = std::cos(yaw);
     const double forwardY = std::sin(yaw);
     const double rightX = -forwardY;
