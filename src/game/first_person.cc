@@ -35,6 +35,11 @@ struct FirstPersonPick {
     int id;
 };
 static std::vector<FirstPersonPick> gFirstPersonPicks;
+// Interaction proxy picks cover the opaque source bounds of billboard objects,
+// not just their currently opaque destination pixels. This keeps large nearby
+// terminals/containers selectable even when the cursor sits over a scaled-up
+// transparent hole in the original isometric FRM.
+static std::vector<FirstPersonPick> gFirstPersonInteractionPicks;
 static int gPickWidth = 0;
 static int gPickHeight = 0;
 static int gPickTile = -1;
@@ -108,6 +113,7 @@ void first_person_toggle()
             + ROTATION_COUNT) % ROTATION_COUNT;
     }
     gFirstPersonPicks.clear();
+    gFirstPersonInteractionPicks.clear();
 }
 
 // The view heading belongs to presentation, not native animation/pathing.
@@ -173,7 +179,7 @@ Object* first_person_object_at(int screenX, int screenY, int objectType, bool in
         || elevation != map_elevation || elevation != gPickElevation
         || obj_dude->tile != gPickTile || first_person_rotation() != gPickRotation
         || gPickWidth != win_width(display_win) || gPickHeight != win_height(display_win)
-        || gFirstPersonPicks.empty()) {
+        || gFirstPersonPicks.empty() || gFirstPersonInteractionPicks.empty()) {
         return nullptr;
     }
     Rect rect;
@@ -220,6 +226,17 @@ Object* first_person_object_at(int screenX, int screenY, int objectType, bool in
         return exact;
     }
 
+    // Billboard objects also have a depth-tested interaction footprint based
+    // on the opaque bounds of their source FRM. At close range, transparent
+    // holes in isometric art can scale far beyond a fixed pixel halo; this
+    // proxy keeps the object selectable without changing what is actually
+    // rendered or bypassing Fallout's native object/use/combat logic.
+    const FirstPersonPick proxyPick =
+        gFirstPersonInteractionPicks[y * gPickWidth + x];
+    if (Object* proxy = resolvePick(proxyPick, false)) {
+        return proxy;
+    }
+
     // Fallout's original sprites are sparse isometric silhouettes. In first
     // person, a literal one-pixel hit test makes small switches, items and
     // distant critters unnecessarily hard to select. Search a tiny screen-space
@@ -249,8 +266,11 @@ Object* first_person_object_at(int screenX, int screenY, int objectType, bool in
                 continue;
             }
 
-            const FirstPersonPick nearbyPick =
+            FirstPersonPick nearbyPick =
                 gFirstPersonPicks[py * gPickWidth + px];
+            if (nearbyPick.object == nullptr) {
+                nearbyPick = gFirstPersonInteractionPicks[py * gPickWidth + px];
+            }
             Object* candidate = resolvePick(
                 nearbyPick,
                 objectType == OBJ_TYPE_WALL);
@@ -429,6 +449,8 @@ void first_person_render()
     gPickRotation = first_person_rotation();
     gPickElevation = map_elevation;
     gFirstPersonPicks.assign(static_cast<size_t>(width) * height, { nullptr, -1 });
+    gFirstPersonInteractionPicks.assign(
+        static_cast<size_t>(width) * height, { nullptr, -1 });
 
     const int sky = colorTable[0];
     const int ground = colorTable[10570];
@@ -474,6 +496,8 @@ void first_person_render()
     // per framebuffer pixel gives later wall geometry a proper foundation and
     // stops distant cardboard sprites from drawing through nearer ones.
     std::vector<double> depthBuffer(static_cast<size_t>(width) * height, kFarPlane + 1.0);
+    std::vector<double> interactionDepth(
+        static_cast<size_t>(width) * height, kFarPlane + 1.0);
 
     // v0.009: perspective-map Fallout's real floor tiles onto the ground.
     //
@@ -1616,6 +1640,21 @@ void first_person_render()
             break;
         }
 
+        int opaqueMinX = frame->width;
+        int opaqueMinY = frame->height;
+        int opaqueMaxX = -1;
+        int opaqueMaxY = -1;
+        for (int sy = 0; sy < frame->height; sy++) {
+            for (int sx = 0; sx < frame->width; sx++) {
+                if (pixels[sy * frame->width + sx] != 0) {
+                    opaqueMinX = std::min(opaqueMinX, sx);
+                    opaqueMinY = std::min(opaqueMinY, sy);
+                    opaqueMaxX = std::max(opaqueMaxX, sx);
+                    opaqueMaxY = std::max(opaqueMaxY, sy);
+                }
+            }
+        }
+
         const double worldWidth = worldHeight * frame->width / frame->height;
         const int projectedWidth = std::max(1, static_cast<int>(focal * worldWidth / object.z));
         const int projectedHeight = std::max(1, static_cast<int>(focal * worldHeight / object.z));
@@ -1631,14 +1670,29 @@ void first_person_render()
             const int sourceY = std::clamp((screenY - top) * frame->height / projectedHeight, 0, frame->height - 1);
             for (int screenX = std::max(0, left); screenX < std::min(width, left + projectedWidth); screenX++) {
                 const int sourceX = std::clamp((screenX - left) * frame->width / projectedWidth, 0, frame->width - 1);
+                const int destination = screenY * width + screenX;
+
+                // Interaction footprint: use the source sprite's opaque bounds,
+                // but still honor current scene depth. This fills transparent
+                // holes inside a terminal/container/critter silhouette without
+                // making the whole projected FRM rectangle clickable.
+                if (opaqueMaxX >= opaqueMinX && opaqueMaxY >= opaqueMinY
+                    && sourceX >= opaqueMinX && sourceX <= opaqueMaxX
+                    && sourceY >= opaqueMinY && sourceY <= opaqueMaxY
+                    && object.z <= depthBuffer[destination] + 0.0001
+                    && object.z < interactionDepth[destination]) {
+                    interactionDepth[destination] = object.z;
+                    gFirstPersonInteractionPicks[destination] = {
+                        object.object,
+                        object.object->id,
+                    };
+                }
+
                 const unsigned char pixel = pixels[sourceY * frame->width + sourceX];
-                if (pixel != 0) {
-                    const int destination = screenY * width + screenX;
-                    if (object.z < depthBuffer[destination]) {
-                        buffer[destination] = pixel;
-                        depthBuffer[destination] = object.z;
-                        gFirstPersonPicks[destination] = { object.object, object.object->id };
-                    }
+                if (pixel != 0 && object.z < depthBuffer[destination]) {
+                    buffer[destination] = pixel;
+                    depthBuffer[destination] = object.z;
+                    gFirstPersonPicks[destination] = { object.object, object.object->id };
                 }
             }
         }
@@ -1676,8 +1730,11 @@ void first_person_render()
                     continue;
                 }
 
-                const FirstPersonPick candidate =
+                FirstPersonPick candidate =
                     gFirstPersonPicks[py * width + px];
+                if (candidate.object == nullptr) {
+                    candidate = gFirstPersonInteractionPicks[py * width + px];
+                }
                 if (candidate.object == nullptr
                     || FID_TYPE(candidate.object->fid) == OBJ_TYPE_WALL) {
                     continue;
