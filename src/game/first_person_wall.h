@@ -46,56 +46,63 @@ inline FirstPersonWallKind first_person_wall_kind(unsigned int extendedFlags)
 }
 
 // Fallout's visible walls are authored on an orthogonal structural lattice
-// laid over the movement hexes. Consecutive East/West wall tiles alternate
-// above and below that line because of hex-column parity, so recenter them by
-// one quarter hex before building planes.
+// laid over the movement hexes. East/West pieces need a parity correction
+// because consecutive hex centers zigzag by half a world-Y unit. North/South
+// pieces do not: their centers already lie on the same world-X line.
+//
+// Corner sprites live at the intersection of those two lattices. Their
+// horizontal arm ends half-way to the neighboring East/West piece. Their
+// vertical arm must end at the actual North/South segment boundary
+// (worldY +/- 0.5), not at a fixed half-length from the shifted corner vertex.
+// That distinction is what closes the quarter-hex holes visible at corners.
 inline std::vector<FirstPersonWallSegment> first_person_wall_segments(int tile,
     unsigned int extendedFlags, int rotation, double worldX, double worldY)
 {
     constexpr double kHalfColumnSpacing = 0.4330127018922193; // sqrt(3) / 4
     constexpr double kHalfRowSpacing = 0.5;
 
-    const double centerX = worldX;
-    const double centerY = worldY + (((tile % 200) & 1) != 0 ? 0.25 : -0.25);
+    const bool oddColumn = ((tile % 200) & 1) != 0;
+    const double horizontalY = worldY + (oddColumn ? 0.25 : -0.25);
     const FirstPersonWallKind kind = first_person_wall_kind(extendedFlags);
 
     std::vector<FirstPersonWallSegment> segments;
     switch (kind) {
     case FIRST_PERSON_WALL_NORTH_SOUTH:
-        segments.push_back({ centerX, centerY - kHalfRowSpacing,
-            centerX, centerY + kHalfRowSpacing, 0.0, 1.0 });
+        segments.push_back({ worldX, worldY - kHalfRowSpacing,
+            worldX, worldY + kHalfRowSpacing, 0.0, 1.0 });
         break;
     case FIRST_PERSON_WALL_EAST_WEST:
-        segments.push_back({ centerX - kHalfColumnSpacing, centerY,
-            centerX + kHalfColumnSpacing, centerY, 0.0, 1.0 });
+        segments.push_back({ worldX - kHalfColumnSpacing, horizontalY,
+            worldX + kHalfColumnSpacing, horizontalY, 0.0, 1.0 });
         break;
     case FIRST_PERSON_WALL_NORTH_CORNER:
-        // Tile-space right + down.
-        segments.push_back({ centerX, centerY,
-            centerX - kHalfColumnSpacing, centerY, 0.5, 0.0 });
-        segments.push_back({ centerX, centerY,
-            centerX, centerY + kHalfRowSpacing, 0.5, 1.0 });
+        // Tile-space right + down: horizontal joins tile + 1, vertical joins
+        // the North/South piece on the next row.
+        segments.push_back({ worldX, horizontalY,
+            worldX - kHalfColumnSpacing, horizontalY, 0.5, 0.0 });
+        segments.push_back({ worldX, horizontalY,
+            worldX, worldY + kHalfRowSpacing, 0.5, 1.0 });
         break;
     case FIRST_PERSON_WALL_SOUTH_CORNER:
         // Tile-space left + up.
-        segments.push_back({ centerX, centerY,
-            centerX + kHalfColumnSpacing, centerY, 0.5, 0.0 });
-        segments.push_back({ centerX, centerY,
-            centerX, centerY - kHalfRowSpacing, 0.5, 1.0 });
+        segments.push_back({ worldX, horizontalY,
+            worldX + kHalfColumnSpacing, horizontalY, 0.5, 0.0 });
+        segments.push_back({ worldX, horizontalY,
+            worldX, worldY - kHalfRowSpacing, 0.5, 1.0 });
         break;
     case FIRST_PERSON_WALL_EAST_CORNER:
         // Tile-space right + up.
-        segments.push_back({ centerX, centerY,
-            centerX - kHalfColumnSpacing, centerY, 0.5, 0.0 });
-        segments.push_back({ centerX, centerY,
-            centerX, centerY - kHalfRowSpacing, 0.5, 1.0 });
+        segments.push_back({ worldX, horizontalY,
+            worldX - kHalfColumnSpacing, horizontalY, 0.5, 0.0 });
+        segments.push_back({ worldX, horizontalY,
+            worldX, worldY - kHalfRowSpacing, 0.5, 1.0 });
         break;
     case FIRST_PERSON_WALL_WEST_CORNER:
         // Tile-space left + down.
-        segments.push_back({ centerX, centerY,
-            centerX + kHalfColumnSpacing, centerY, 0.5, 0.0 });
-        segments.push_back({ centerX, centerY,
-            centerX, centerY + kHalfRowSpacing, 0.5, 1.0 });
+        segments.push_back({ worldX, horizontalY,
+            worldX + kHalfColumnSpacing, horizontalY, 0.5, 0.0 });
+        segments.push_back({ worldX, horizontalY,
+            worldX, worldY + kHalfRowSpacing, 0.5, 1.0 });
         break;
     case FIRST_PERSON_WALL_UNKNOWN:
         {
@@ -103,15 +110,14 @@ inline std::vector<FirstPersonWallSegment> first_person_wall_segments(int tile,
                 + (rotation % 3) * 3.14159265358979323846 / 3.0;
             const double dx = std::cos(angle) * 0.5;
             const double dy = std::sin(angle) * 0.5;
-            segments.push_back({ centerX - dx, centerY - dy,
-                centerX + dx, centerY + dy, 0.0, 1.0 });
+            segments.push_back({ worldX - dx, worldY - dy,
+                worldX + dx, worldY + dy, 0.0, 1.0 });
         }
         break;
     }
 
     return segments;
 }
-
 
 inline FirstPersonWallSegment first_person_overlap_wall_segment(
     FirstPersonWallSegment segment, double overlap)
