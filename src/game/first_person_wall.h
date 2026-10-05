@@ -1,41 +1,10 @@
 #ifndef FALLOUT_GAME_FIRST_PERSON_WALL_H_
 #define FALLOUT_GAME_FIRST_PERSON_WALL_H_
 
-#include <algorithm>
 #include <cmath>
 #include <vector>
 
 namespace fallout {
-
-enum class FirstPersonWallType {
-    NorthSouth = 0,
-    EastWest = 1,
-    NorthCorner = 2,
-    SouthCorner = 3,
-    EastCorner = 4,
-    WestCorner = 5,
-};
-
-// Fallout stores the wall-light type in the high bits of prototype
-// extendedFlags. Low action bits (for example 0x2000) must not affect
-// structural classification.
-inline FirstPersonWallType first_person_wall_type(unsigned int extendedFlags)
-{
-    switch (extendedFlags & 0xF8000000u) {
-    case 0x08000000u:
-        return FirstPersonWallType::EastWest;
-    case 0x10000000u:
-        return FirstPersonWallType::NorthCorner;
-    case 0x20000000u:
-        return FirstPersonWallType::SouthCorner;
-    case 0x40000000u:
-        return FirstPersonWallType::EastCorner;
-    case 0x80000000u:
-        return FirstPersonWallType::WestCorner;
-    default:
-        return FirstPersonWallType::NorthSouth;
-    }
-}
 
 struct FirstPersonWallSegment {
     double ax;
@@ -46,78 +15,103 @@ struct FirstPersonWallSegment {
     double u1;
 };
 
-// Structural wall geometry comes from the wall-light type encoded in the PRO,
-// not from object rotation, FRM dimensions, or whatever neighbors happen to be
-// camera-visible. The existing world mapping places north/south wall centers
-// on a straight Y chain. Consecutive east/west wall objects alternate by a
-// half-step in Y because of hex-column parity; shift them onto the shared wall
-// line before emitting the segment.
-inline std::vector<FirstPersonWallSegment> first_person_wall_segments(int tile,
-    FirstPersonWallType type, double worldX, double worldY)
+enum FirstPersonWallKind {
+    FIRST_PERSON_WALL_NORTH_SOUTH,
+    FIRST_PERSON_WALL_EAST_WEST,
+    FIRST_PERSON_WALL_NORTH_CORNER,
+    FIRST_PERSON_WALL_SOUTH_CORNER,
+    FIRST_PERSON_WALL_EAST_CORNER,
+    FIRST_PERSON_WALL_WEST_CORNER,
+    FIRST_PERSON_WALL_UNKNOWN,
+};
+
+inline FirstPersonWallKind first_person_wall_kind(unsigned int extendedFlags)
 {
-    constexpr double kSqrt3Over2 = 0.8660254037844386;
-    constexpr double kEastWestHalfLength = kSqrt3Over2 * 0.5;
-    constexpr double kNorthSouthHalfLength = 0.5;
-
-    const bool oddColumn = (tile % 200 & 1) != 0;
-    const double eastWestY = worldY + (oddColumn ? 0.25 : -0.25);
-
-    auto horizontal = [worldX, eastWestY](double sign) {
-        return FirstPersonWallSegment {
-            worldX,
-            eastWestY,
-            worldX + sign * kEastWestHalfLength,
-            eastWestY,
-            sign < 0.0 ? 1.0 : 0.0,
-            0.5,
-        };
-    };
-    auto vertical = [worldX, eastWestY](double sign) {
-        return FirstPersonWallSegment {
-            worldX,
-            eastWestY,
-            worldX,
-            eastWestY + sign * kNorthSouthHalfLength,
-            sign < 0.0 ? 0.5 : 0.5,
-            sign < 0.0 ? 0.0 : 1.0,
-        };
-    };
-
-    switch (type) {
-    case FirstPersonWallType::NorthSouth:
-        return { {
-            worldX,
-            worldY - kNorthSouthHalfLength,
-            worldX,
-            worldY + kNorthSouthHalfLength,
-            0.0,
-            1.0,
-        } };
-    case FirstPersonWallType::EastWest:
-        return { {
-            worldX - kEastWestHalfLength,
-            eastWestY,
-            worldX + kEastWestHalfLength,
-            eastWestY,
-            0.0,
-            1.0,
-        } };
-    case FirstPersonWallType::NorthCorner:
-        // Vault map samples show this corner terminating an east/west run on
-        // its west side while turning toward increasing world Y.
-        return { horizontal(-1.0), vertical(1.0) };
-    case FirstPersonWallType::SouthCorner:
-        return { horizontal(1.0), vertical(-1.0) };
-    case FirstPersonWallType::EastCorner:
-        return { horizontal(-1.0), vertical(-1.0) };
-    case FirstPersonWallType::WestCorner:
-        return { horizontal(1.0), vertical(1.0) };
+    switch (extendedFlags & 0xF8000000u) {
+    case 0x00000000u:
+        return FIRST_PERSON_WALL_NORTH_SOUTH;
+    case 0x08000000u:
+        return FIRST_PERSON_WALL_EAST_WEST;
+    case 0x10000000u:
+        return FIRST_PERSON_WALL_NORTH_CORNER;
+    case 0x20000000u:
+        return FIRST_PERSON_WALL_SOUTH_CORNER;
+    case 0x40000000u:
+        return FIRST_PERSON_WALL_EAST_CORNER;
+    case 0x80000000u:
+        return FIRST_PERSON_WALL_WEST_CORNER;
+    default:
+        return FIRST_PERSON_WALL_UNKNOWN;
     }
-
-    return {};
 }
 
-// Interpolate UVs together with camera-space coordinates at the near plane.
+// Fallout's visible walls are authored on an orthogonal structural lattice
+// laid over the movement hexes. Consecutive East/West wall tiles alternate
+// above and below that line because of hex-column parity, so recenter them by
+// one quarter hex before building planes.
+inline std::vector<FirstPersonWallSegment> first_person_wall_segments(int tile,
+    unsigned int extendedFlags, int rotation, double worldX, double worldY)
+{
+    constexpr double kHalfColumnSpacing = 0.4330127018922193; // sqrt(3) / 4
+    constexpr double kHalfRowSpacing = 0.5;
+
+    const double centerX = worldX;
+    const double centerY = worldY + (((tile % 200) & 1) != 0 ? 0.25 : -0.25);
+    const FirstPersonWallKind kind = first_person_wall_kind(extendedFlags);
+
+    std::vector<FirstPersonWallSegment> segments;
+    switch (kind) {
+    case FIRST_PERSON_WALL_NORTH_SOUTH:
+        segments.push_back({ centerX, centerY - kHalfRowSpacing,
+            centerX, centerY + kHalfRowSpacing, 0.0, 1.0 });
+        break;
+    case FIRST_PERSON_WALL_EAST_WEST:
+        segments.push_back({ centerX - kHalfColumnSpacing, centerY,
+            centerX + kHalfColumnSpacing, centerY, 0.0, 1.0 });
+        break;
+    case FIRST_PERSON_WALL_NORTH_CORNER:
+        // Tile-space right + down.
+        segments.push_back({ centerX, centerY,
+            centerX - kHalfColumnSpacing, centerY, 0.5, 0.0 });
+        segments.push_back({ centerX, centerY,
+            centerX, centerY + kHalfRowSpacing, 0.5, 1.0 });
+        break;
+    case FIRST_PERSON_WALL_SOUTH_CORNER:
+        // Tile-space left + up.
+        segments.push_back({ centerX, centerY,
+            centerX + kHalfColumnSpacing, centerY, 0.5, 0.0 });
+        segments.push_back({ centerX, centerY,
+            centerX, centerY - kHalfRowSpacing, 0.5, 1.0 });
+        break;
+    case FIRST_PERSON_WALL_EAST_CORNER:
+        // Tile-space right + up.
+        segments.push_back({ centerX, centerY,
+            centerX - kHalfColumnSpacing, centerY, 0.5, 0.0 });
+        segments.push_back({ centerX, centerY,
+            centerX, centerY - kHalfRowSpacing, 0.5, 1.0 });
+        break;
+    case FIRST_PERSON_WALL_WEST_CORNER:
+        // Tile-space left + down.
+        segments.push_back({ centerX, centerY,
+            centerX + kHalfColumnSpacing, centerY, 0.5, 0.0 });
+        segments.push_back({ centerX, centerY,
+            centerX, centerY + kHalfRowSpacing, 0.5, 1.0 });
+        break;
+    case FIRST_PERSON_WALL_UNKNOWN:
+        {
+            const double angle = -3.14159265358979323846 / 6.0
+                + (rotation % 3) * 3.14159265358979323846 / 3.0;
+            const double dx = std::cos(angle) * 0.5;
+            const double dy = std::sin(angle) * 0.5;
+            segments.push_back({ centerX - dx, centerY - dy,
+                centerX + dx, centerY + dy, 0.0, 1.0 });
+        }
+        break;
+    }
+
+    return segments;
+}
+
 inline bool first_person_clip_wall(double& ax, double& az, double& bx,
     double& bz, double& u0, double& u1, double nearPlane)
 {
