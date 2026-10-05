@@ -1,5 +1,6 @@
 #include "game/first_person.h"
 #include "game/first_person_wall.h"
+#include "game/first_person_doorway.h"
 
 #include <algorithm>
 #include <cmath>
@@ -47,6 +48,8 @@ struct FirstPersonWallSprite {
     unsigned int extendedFlags;
     double worldX;
     double worldY;
+    double baseHeight = 0.0;
+    double materialVMax = 1.0;
 };
 
 struct FirstPersonWallMaterial {
@@ -944,13 +947,49 @@ void first_person_render()
         return &corner;
     };
 
+    // Add overhead spans only for verified paired doorway art. Keep this
+    // separate from walls: lintels must not become blocker reconstruction or
+    // corner-material evidence. No existing segment or passage width changes.
+    std::vector<FirstPersonWallSprite> renderedWalls = walls;
+    for (const FirstPersonWallSprite& a : walls) {
+        if (a.object->tile != a.tile) {
+            continue; // Not a native wall piece (e.g. a blocker-backed bridge).
+        }
+        char nameA[64] = { 0 };
+        art_get_base_name(OBJ_TYPE_WALL, a.fid & 0xFFF, nameA);
+        if (std::strcmp(nameA, "dv1036.frm") != 0
+            && std::strcmp(nameA, "dv1043.frm") != 0) {
+            continue;
+        }
+        const int delta = std::strcmp(nameA, "dv1036.frm") == 0 ? 2 : 400;
+        const FirstPersonWallSprite* b = wallAtTile(a.tile + delta);
+        if (b == nullptr || b->object->tile != b->tile) {
+            continue;
+        }
+        char nameB[64] = { 0 };
+        art_get_base_name(OBJ_TYPE_WALL, b->fid & 0xFFF, nameB);
+        const int gap = first_person_doorway_gap(nameA, a.tile, a.extendedFlags,
+            nameB, b->tile, b->extendedFlags);
+        if (gap < 0 || wallAtTile(gap) != nullptr || blockAtTile(gap) || doorAtTile(gap)) {
+            continue;
+        }
+        // The horizontal pair's second piece and vertical pair's first piece
+        // contain the broad overhead trim in the verified source artwork.
+        FirstPersonWallSprite lintel = delta == 2 ? *b : a;
+        lintel.tile = gap;
+        tileToWorld(gap, &lintel.worldX, &lintel.worldY);
+        lintel.baseHeight = 1.35;
+        lintel.materialVMax = 0.28;
+        renderedWalls.push_back(lintel);
+    }
+
     constexpr double kStructuralWallHeight = 1.65;
 
     // Structural geometry and wall material are deliberately separate. Straight
     // pieces keep their own art; each corner arm first tries to borrow the
     // continuation wall's clean straight material. This avoids folding one
     // isometric corner sprite around two perpendicular first-person planes.
-    for (const FirstPersonWallSprite& wall : walls) {
+    for (const FirstPersonWallSprite& wall : renderedWalls) {
         const FirstPersonWallKind wallKind =
             first_person_wall_kind(wall.extendedFlags);
         const auto segments = first_person_wall_segments(
@@ -1010,10 +1049,12 @@ void first_person_render()
 
             const int screenAX = width / 2 + static_cast<int>(ax * focal / az);
             const int screenBX = width / 2 + static_cast<int>(bx * focal / bz);
-            const int bottomAY = horizon + static_cast<int>(focal * kEyeHeight / az);
-            const int bottomBY = horizon + static_cast<int>(focal * kEyeHeight / bz);
-            const int topAY = bottomAY - static_cast<int>(focal * kStructuralWallHeight / az);
-            const int topBY = bottomBY - static_cast<int>(focal * kStructuralWallHeight / bz);
+            const int groundAY = horizon + static_cast<int>(focal * kEyeHeight / az);
+            const int groundBY = horizon + static_cast<int>(focal * kEyeHeight / bz);
+            const int bottomAY = groundAY - static_cast<int>(focal * wall.baseHeight / az);
+            const int bottomBY = groundBY - static_cast<int>(focal * wall.baseHeight / bz);
+            const int topAY = groundAY - static_cast<int>(focal * kStructuralWallHeight / az);
+            const int topBY = groundBY - static_cast<int>(focal * kStructuralWallHeight / bz);
 
             const int minX = std::max(0, std::min(screenAX, screenBX));
             const int maxX = std::min(width - 1, std::max(screenAX, screenBX));
@@ -1065,7 +1106,8 @@ void first_person_render()
                             0,
                             std::max(0, material->width - 1));
                         const int materialY = std::clamp(
-                            (screenY - top) * material->height / columnHeight,
+                            (screenY - top) * std::max(1, static_cast<int>(
+                                material->height * wall.materialVMax)) / columnHeight,
                             0,
                             std::max(0, material->height - 1));
                         pixel = material->pixels[

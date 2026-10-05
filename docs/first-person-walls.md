@@ -300,3 +300,34 @@ normal gameplay. It contains local game artwork and is not a repository fixture.
 
 No wall lattice, blocker-span reconstruction, door state/use behavior, or native
 movement changes are included in this cleanup.
+
+## Verified doorway overhead spans
+
+The nearby source-art export identifies two paired wall-art constructions:
+
+- `dv1036.frm` at tile 14677 and `dv1035.frm` at 14679 flank empty tile 14678.
+- `dv1043.frm` at tile 15092 and `dv1044.frm` at 15492 flank empty tile 15292.
+
+The new visual profiles require these exact art pairs, matching structural
+orientations, and the corresponding tile spacing. They are asset-based, not
+hard-coded to these example map coordinates. Row wrapping, ordinary wall art,
+and mismatched pairs are rejected. An existing wall, wall blocker, or native
+door on the middle tile also prevents this additional geometry.
+
+For a verified pair, the renderer adds only an overhead span across the empty
+middle segment, from height 1.35 to the existing wall height 1.65. It samples
+the upper 28% of the broad header piece's rectified material. These dimensions
+and texture sampling are initial visual approximations requiring Deck review.
+The existing flank wall geometry and passage width remain untouched. Header
+pixels use normal depth testing and retain a real wall object as pick owner;
+no new engine object, use action, or collision is created. The added spans are
+kept outside the topology/corner-material collection so they cannot change
+established wall reconstruction.
+
+This is an overhead framing pass, not completed 3D doorway modeling. Narrower
+posts, jamb depth, windows, and the separate `bvs40.frm` round vault-door scenery
+remain deferred. Unknown gaps remain open rather than receiving guessed frames.
+
+Regression coverage: `tests/first_person_doorway_test.cc` checks both verified
+pairs and rejects wrong art, orientation, spacing, map bounds, and row wrapping.
+The existing wall-lattice regression suite remains unchanged.
