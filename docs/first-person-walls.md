@@ -215,3 +215,27 @@ Blocker-backed bridges are also door-aware. If a blocker trace encounters a
 scenery prototype of type `SCENERY_TYPE_DOOR`, the bridge is rejected so a
 semantic doorway cannot be permanently sealed by reconstructed wall geometry.
 Door open/closed presentation remains a scenery/rendering task.
+
+
+## Native translucent-egg compatibility
+
+Fallout's original object renderer has a special player-visibility mask, the
+translucent "egg". Wall/scenery pieces are tested against the player's side
+using their prototype `extendedFlags`, plus `OBJECT_WALL_TRANS_END`, before
+the egg mask is blended through the sprite.
+
+The first-person renderer now mirrors that native sidedness test only as
+material metadata. It does **not** render the top-down egg effect.
+
+When a wall would be egg-sensitive in the native renderer:
+
+- keep its first-person structural geometry fully solid
+- determine the face axis from the actual first-person segment
+- search both directions on that axis for the nearest compatible straight wall
+- search may pass only through proven `block.frm` topology and stops at doors
+- borrow the compatible straight wall material when found
+- if no clean continuation exists, keep the wall's own already-rectified solid
+  material rather than deleting or alpha-cutting the structural face
+
+This removes another class of top-down-only rendering assumptions without
+changing collision, movement, wall topology, or semantic openings.
