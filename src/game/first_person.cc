@@ -544,6 +544,9 @@ void first_person_render()
         int opaqueMaxY = 0;
         std::vector<int> rowOpaqueMinX;
         std::vector<int> rowOpaqueMaxX;
+        std::vector<unsigned char> rectifiedWallPixels;
+        int rectifiedWidth = 0;
+        int rectifiedHeight = 0;
         if (!debugWalls) {
             Art* art = art_ptr_lock(wall.fid, &cacheEntry);
             if (art == nullptr) {
@@ -581,6 +584,68 @@ void first_person_render()
             if (opaqueMaxX < opaqueMinX || opaqueMaxY < opaqueMinY) {
                 art_ptr_unlock(cacheEntry);
                 continue;
+            }
+
+            // Build a rectangular first-person material once per wall object.
+            // Each output row stretches only that FRM scanline's opaque span
+            // across the wall. Transparent holes inside the span are repaired
+            // from the nearest opaque texel so the 2D cutout mask cannot punch
+            // accidental holes through structural geometry.
+            rectifiedWidth = opaqueMaxX - opaqueMinX + 1;
+            rectifiedHeight = opaqueMaxY - opaqueMinY + 1;
+            rectifiedWallPixels.assign(
+                static_cast<size_t>(rectifiedWidth) * rectifiedHeight, 0);
+
+            for (int ry = 0; ry < rectifiedHeight; ry++) {
+                int sourceY = opaqueMinY + ry;
+                if (rowOpaqueMaxX[sourceY] < rowOpaqueMinX[sourceY]) {
+                    for (int radius = 1; radius < frame->height; radius++) {
+                        const int up = sourceY - radius;
+                        const int down = sourceY + radius;
+                        if (up >= opaqueMinY
+                            && rowOpaqueMaxX[up] >= rowOpaqueMinX[up]) {
+                            sourceY = up;
+                            break;
+                        }
+                        if (down <= opaqueMaxY
+                            && rowOpaqueMaxX[down] >= rowOpaqueMinX[down]) {
+                            sourceY = down;
+                            break;
+                        }
+                    }
+                }
+
+                const int rowMinX = rowOpaqueMinX[sourceY];
+                const int rowMaxX = rowOpaqueMaxX[sourceY];
+                if (rowMaxX < rowMinX) {
+                    continue;
+                }
+
+                for (int rx = 0; rx < rectifiedWidth; rx++) {
+                    const double materialU = rectifiedWidth > 1
+                        ? static_cast<double>(rx) / (rectifiedWidth - 1)
+                        : 0.0;
+                    const int sourceX = std::clamp(
+                        rowMinX + static_cast<int>(std::lround(
+                            materialU * (rowMaxX - rowMinX))),
+                        rowMinX,
+                        rowMaxX);
+
+                    unsigned char pixel = pixels[sourceY * frame->width + sourceX];
+                    if (pixel == 0) {
+                        for (int radius = 1; radius <= rowMaxX - rowMinX && pixel == 0; radius++) {
+                            const int leftX = sourceX - radius;
+                            const int rightX = sourceX + radius;
+                            if (leftX >= rowMinX) {
+                                pixel = pixels[sourceY * frame->width + leftX];
+                            }
+                            if (pixel == 0 && rightX <= rowMaxX) {
+                                pixel = pixels[sourceY * frame->width + rightX];
+                            }
+                        }
+                    }
+                    rectifiedWallPixels[ry * rectifiedWidth + rx] = pixel;
+                }
             }
 
         }
@@ -662,67 +727,22 @@ void first_person_render()
                 }
 
                 for (int screenY = std::max(0, top); screenY <= std::min(height - 1, bottom); screenY++) {
-                    int sourceY = std::clamp(
-                        opaqueMinY + (screenY - top) * opaqueHeight / columnHeight,
-                        opaqueMinY,
-                        opaqueMaxY);
                     unsigned char pixel;
                     if (debugWalls) {
                         pixel = colorTable[debugWallColor(wallKind)];
                     } else {
-                        // A Fallout wall FRM is an isometric cutout, not a
-                        // rectangular texture. Rectify it scanline-by-scanline:
-                        // map wall U across the opaque span of this row instead
-                        // of across the FRM's global bounding box. This removes
-                        // the diagonal/stepped alpha silhouette from the 3D
-                        // material while preserving the art itself.
-                        if (rowOpaqueMaxX[sourceY] < rowOpaqueMinX[sourceY]) {
-                            for (int radius = 1; radius < frame->height; radius++) {
-                                const int up = sourceY - radius;
-                                const int down = sourceY + radius;
-                                if (up >= opaqueMinY
-                                    && rowOpaqueMaxX[up] >= rowOpaqueMinX[up]) {
-                                    sourceY = up;
-                                    break;
-                                }
-                                if (down <= opaqueMaxY
-                                    && rowOpaqueMaxX[down] >= rowOpaqueMinX[down]) {
-                                    sourceY = down;
-                                    break;
-                                }
-                            }
-                        }
-
-                        const int rowMinX = rowOpaqueMinX[sourceY];
-                        const int rowMaxX = rowOpaqueMaxX[sourceY];
-                        if (rowMaxX < rowMinX) {
-                            continue;
-                        }
-
                         const double materialU = std::clamp(worldT, 0.0, 1.0);
-                        const int sourceX = std::clamp(
-                            rowMinX + static_cast<int>(materialU * std::max(0, rowMaxX - rowMinX)),
-                            rowMinX,
-                            rowMaxX);
-                        pixel = pixels[sourceY * frame->width + sourceX];
-
-                        // Transparency inside an opaque scanline is part of the
-                        // original 2D compositing mask. A structural wall plane
-                        // must remain solid; use the nearest opaque texel from
-                        // the same row. Real openings will come from map
-                        // semantics (doors/scenery), not wall-sprite alpha.
-                        if (pixel == 0) {
-                            for (int radius = 1; radius <= rowMaxX - rowMinX && pixel == 0; radius++) {
-                                const int leftX = sourceX - radius;
-                                const int rightX = sourceX + radius;
-                                if (leftX >= rowMinX) {
-                                    pixel = pixels[sourceY * frame->width + leftX];
-                                }
-                                if (pixel == 0 && rightX <= rowMaxX) {
-                                    pixel = pixels[sourceY * frame->width + rightX];
-                                }
-                            }
-                        }
+                        const int materialX = std::clamp(
+                            static_cast<int>(std::lround(
+                                materialU * std::max(0, rectifiedWidth - 1))),
+                            0,
+                            std::max(0, rectifiedWidth - 1));
+                        const int materialY = std::clamp(
+                            (screenY - top) * rectifiedHeight / columnHeight,
+                            0,
+                            std::max(0, rectifiedHeight - 1));
+                        pixel = rectifiedWallPixels[
+                            materialY * rectifiedWidth + materialX];
                         if (pixel == 0) {
                             continue;
                         }
