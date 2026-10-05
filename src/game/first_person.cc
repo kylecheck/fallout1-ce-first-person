@@ -185,19 +185,83 @@ Object* first_person_object_at(int screenX, int screenY, int objectType, bool in
     if (x < 0 || x >= gPickWidth || y < 0 || y >= gPickHeight) {
         return nullptr;
     }
-    const FirstPersonPick pick = gFirstPersonPicks[y * gPickWidth + x];
-    if (pick.object == nullptr) {
-        return nullptr;
-    }
-    for (Object* object = obj_find_first_at(elevation); object != nullptr; object = obj_find_next_at()) {
-        if (object == pick.object && object->id == pick.id
-            && (object->flags & OBJECT_HIDDEN) == 0
-            && (includeDude || object != obj_dude)
-            && (objectType == -1 || FID_TYPE(object->fid) == objectType)) {
+
+    auto resolvePick = [&](const FirstPersonPick& pick, bool allowWall) -> Object* {
+        if (pick.object == nullptr) {
+            return nullptr;
+        }
+
+        for (Object* object = obj_find_first_at(elevation);
+             object != nullptr;
+             object = obj_find_next_at()) {
+            if (object != pick.object || object->id != pick.id
+                || (object->flags & OBJECT_HIDDEN) != 0
+                || (!includeDude && object == obj_dude)
+                || (objectType != -1 && FID_TYPE(object->fid) != objectType)) {
+                continue;
+            }
+
+            // Generic first-person interaction snapping should not pull the
+            // pointer sideways onto a wall merely because a small object has
+            // transparent pixels around it. Explicit wall queries still work.
+            if (!allowWall && FID_TYPE(object->fid) == OBJ_TYPE_WALL) {
+                return nullptr;
+            }
+
             return object;
         }
+
+        return nullptr;
+    };
+
+    // Exact visible-pixel targeting is always authoritative.
+    const FirstPersonPick exactPick = gFirstPersonPicks[y * gPickWidth + x];
+    if (Object* exact = resolvePick(exactPick, true)) {
+        return exact;
     }
-    return nullptr;
+
+    // Fallout's original sprites are sparse isometric silhouettes. In first
+    // person, a literal one-pixel hit test makes small switches, items and
+    // distant critters unnecessarily hard to select. Search a tiny screen-space
+    // halo only when the exact pixel was empty. This remains scene-agnostic:
+    // the returned live Object still flows through Fallout's normal use/combat
+    // code, scripts, AP checks, locks and animation.
+    constexpr int kPickAssistRadius = 6;
+    Object* best = nullptr;
+    int bestDistanceSquared = kPickAssistRadius * kPickAssistRadius + 1;
+
+    for (int dy = -kPickAssistRadius; dy <= kPickAssistRadius; dy++) {
+        const int py = y + dy;
+        if (py < 0 || py >= gPickHeight) {
+            continue;
+        }
+
+        for (int dx = -kPickAssistRadius; dx <= kPickAssistRadius; dx++) {
+            const int distanceSquared = dx * dx + dy * dy;
+            if (distanceSquared == 0
+                || distanceSquared > kPickAssistRadius * kPickAssistRadius
+                || distanceSquared >= bestDistanceSquared) {
+                continue;
+            }
+
+            const int px = x + dx;
+            if (px < 0 || px >= gPickWidth) {
+                continue;
+            }
+
+            const FirstPersonPick nearbyPick =
+                gFirstPersonPicks[py * gPickWidth + px];
+            Object* candidate = resolvePick(
+                nearbyPick,
+                objectType == OBJ_TYPE_WALL);
+            if (candidate != nullptr) {
+                best = candidate;
+                bestDistanceSquared = distanceSquared;
+            }
+        }
+    }
+
+    return best;
 }
 
 // The topology table cannot identify the shape of generic scenery. Export
