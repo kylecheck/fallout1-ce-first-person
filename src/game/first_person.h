@@ -11,6 +11,9 @@ bool first_person_is_enabled();
 void first_person_toggle();
 void first_person_render();
 // Camera heading is independent of native character facing during pathing.
+// Heading uses 24 steps around the circle (15 degrees each); rotation returns
+// the nearest native Fallout hex direction for movement/pathing.
+int first_person_heading();
 int first_person_rotation();
 void first_person_turn(int steps);
 int first_person_target_tile(int screenX, int screenY);
