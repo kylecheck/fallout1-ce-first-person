@@ -713,3 +713,10 @@ A controller activity guard also prevents legacy left/right arrow events from ro
 Attack/crosshair mode now gives the hovered critter a Fallout-green first-person targeting treatment using the existing depth-tested pick buffer. A checker-pattern overlay recolors only the critter's actually visible pixels, so foreground walls and scenery still occlude the target correctly while enough original sprite art remains visible underneath.
 
 The target brackets also switch to the same green treatment in attack mode, and a compact native-font label appears above the target with its name plus current native hit chance. If Fallout rejects the shot, the label mirrors the native reason instead (for example NO AMMO, OUT OF RANGE, NO AP, DEAD, or BLOCKED). Native combat remains fully authoritative; this is presentation only.
+
+
+## First-person equipped weapon presentation
+
+The first-person overlay now presents the currently active native weapon using that item's original Fallout inventory FRM from the user's local game data. Transparent bounds are cropped, the art is nearest-neighbor scaled without changing its aspect ratio, and it is placed as a lower-right 2D/2.5D viewmodel layer. Switching the active hand or weapon therefore changes the viewmodel automatically without introducing duplicate equipment state.
+
+Attack/crosshair mode gives the same weapon art a slightly larger, raised ready pose; normal movement keeps it lower in frame. This is intentionally a presentation prototype using original local assets, not a final reconstructed weapon model. Native weapon state, ammo, AP, attacks, and animations remain authoritative.
