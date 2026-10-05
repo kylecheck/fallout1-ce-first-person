@@ -23,8 +23,23 @@ namespace fallout {
 
 static bool gFirstPersonEnabled = false;
 
+// Pick IDs are written only when a visible scene pixel wins the depth test.
+// Resolve against live map objects before returning; never dereference cached
+// object pointers after a script might have deleted an object.
+struct FirstPersonPick {
+    Object* object;
+    int id;
+};
+static std::vector<FirstPersonPick> gFirstPersonPicks;
+static int gPickWidth = 0;
+static int gPickHeight = 0;
+static int gPickTile = -1;
+static int gPickRotation = -1;
+static int gPickElevation = -1;
+
 // Structural inputs are collected before any camera-space clipping.
 struct FirstPersonWallSprite {
+    Object* object;
     int fid;
     int direction;
     int tile;
@@ -33,6 +48,7 @@ struct FirstPersonWallSprite {
 };
 
 struct FirstPersonObjectSprite {
+    Object* object;
     int fid;
     int frame;
     int direction;
@@ -57,6 +73,80 @@ bool first_person_is_enabled()
 void first_person_toggle()
 {
     gFirstPersonEnabled = !gFirstPersonEnabled;
+    gFirstPersonPicks.clear();
+}
+
+// Input coordinates are desktop/window coordinates, whereas projection uses
+// viewport-local coordinates. Keep a single conversion for highlight and input.
+int first_person_target_tile(int screenX, int screenY)
+{
+    if (!gFirstPersonEnabled || obj_dude == nullptr || display_win == -1) {
+        return -1;
+    }
+    Rect rect;
+    if (win_get_rect(display_win, &rect) != 0) {
+        return -1;
+    }
+    const int width = win_width(display_win);
+    const int height = win_height(display_win);
+    const int x = screenX - rect.ulx;
+    const int y = screenY - rect.uly;
+    const int horizon = height * 43 / 100;
+    if (width <= 0 || height <= 0 || x < 0 || x >= width || y <= horizon || y >= height) {
+        return -1;
+    }
+    const double focal = width * 0.70;
+    const double z = focal * 0.50 / (y - horizon);
+    if (z < 0.45 || z > 36.0) {
+        return -1;
+    }
+    const double cameraX = (x - width * 0.5) * z / focal;
+    constexpr double pi = 3.14159265358979323846;
+    const int rotation = ((obj_dude->rotation % ROTATION_COUNT) + ROTATION_COUNT) % ROTATION_COUNT;
+    const double yaw = -pi / 6.0 + rotation * pi / 3.0;
+    const double dx = -std::sin(yaw) * cameraX + std::cos(yaw) * z;
+    const double dy = std::cos(yaw) * cameraX + std::sin(yaw) * z;
+    int isoX;
+    int isoY;
+    if (tile_coord(obj_dude->tile, &isoX, &isoY, map_elevation) != 0) {
+        return -1;
+    }
+    isoX += static_cast<int>(std::lround(27.712812921102035 * dx + 16.0 * dy));
+    isoY += static_cast<int>(std::lround(-6.928203230275509 * dx + 12.0 * dy));
+    return tile_num(isoX, isoY, map_elevation, false);
+}
+
+Object* first_person_object_at(int screenX, int screenY, int objectType, bool includeDude, int elevation)
+{
+    if (!gFirstPersonEnabled || obj_dude == nullptr || display_win == -1
+        || elevation != map_elevation || elevation != gPickElevation
+        || obj_dude->tile != gPickTile || obj_dude->rotation != gPickRotation
+        || gPickWidth != win_width(display_win) || gPickHeight != win_height(display_win)
+        || gFirstPersonPicks.empty()) {
+        return nullptr;
+    }
+    Rect rect;
+    if (win_get_rect(display_win, &rect) != 0) {
+        return nullptr;
+    }
+    const int x = screenX - rect.ulx;
+    const int y = screenY - rect.uly;
+    if (x < 0 || x >= gPickWidth || y < 0 || y >= gPickHeight) {
+        return nullptr;
+    }
+    const FirstPersonPick pick = gFirstPersonPicks[y * gPickWidth + x];
+    if (pick.object == nullptr) {
+        return nullptr;
+    }
+    for (Object* object = obj_find_first_at(elevation); object != nullptr; object = obj_find_next_at()) {
+        if (object == pick.object && object->id == pick.id
+            && (object->flags & OBJECT_HIDDEN) == 0
+            && (includeDude || object != obj_dude)
+            && (objectType == -1 || FID_TYPE(object->fid) == objectType)) {
+            return object;
+        }
+    }
+    return nullptr;
 }
 
 void first_person_render()
@@ -75,6 +165,13 @@ void first_person_render()
     if (width <= 0 || height <= 0) {
         return;
     }
+
+    gPickWidth = width;
+    gPickHeight = height;
+    gPickTile = obj_dude->tile;
+    gPickRotation = obj_dude->rotation;
+    gPickElevation = map_elevation;
+    gFirstPersonPicks.assign(static_cast<size_t>(width) * height, { nullptr, -1 });
 
     const int sky = colorTable[0];
     const int ground = colorTable[10570];
@@ -224,17 +321,11 @@ void first_person_render()
     int mouseY = height / 2;
     mouse_get_position(&mouseX, &mouseY);
 
-    int targetTile = -1;
-    if (mouseX >= 0 && mouseX < width && mouseY > horizon && mouseY < height) {
-        const double cameraZ = focal * kEyeHeight / (mouseY - horizon);
-        if (cameraZ >= kNearPlane && cameraZ <= kFarPlane) {
-            const double cameraX = (mouseX - width * 0.5) * cameraZ / focal;
-            const double worldDx = rightX * cameraX + forwardX * cameraZ;
-            const double worldDy = rightY * cameraX + forwardY * cameraZ;
-            const int isoX = playerIsoX + static_cast<int>(std::lround(kIsoXFromWorldX * worldDx + 16.0 * worldDy));
-            const int isoY = playerIsoY + static_cast<int>(std::lround(kIsoYFromWorldX * worldDx + 12.0 * worldDy));
-            targetTile = tile_num(isoX, isoY, map_elevation, false);
-        }
+    const int targetTile = first_person_target_tile(mouseX, mouseY);
+    Rect viewportRect;
+    if (win_get_rect(display_win, &viewportRect) == 0) {
+        mouseX -= viewportRect.ulx;
+        mouseY -= viewportRect.uly;
     }
 
     if (targetTile >= 0) {
@@ -280,29 +371,6 @@ void first_person_render()
         }
     }
 
-    // Draw an explicit first-person pointer after our scene has covered the
-    // normal Fallout map cursor. This is intentionally simple and high contrast
-    // for the prototype; the important part is that its tip and highlighted
-    // engine hex now agree.
-    if (mouseX >= 0 && mouseX < width && mouseY >= 0 && mouseY < height) {
-        const int pointerColor = colorTable[31744];
-        const int pointerShadow = colorTable[0];
-        for (int i = 0; i <= 9; i++) {
-            if (mouseY + i < height) {
-                buffer[(mouseY + i) * width + mouseX] = pointerShadow;
-                if (mouseX + 1 < width) {
-                    buffer[(mouseY + i) * width + mouseX + 1] = pointerColor;
-                }
-            }
-            if (mouseX + i < width) {
-                buffer[mouseY * width + mouseX + i] = pointerShadow;
-                if (mouseY + 1 < height) {
-                    buffer[(mouseY + 1) * width + mouseX + i] = pointerColor;
-                }
-            }
-        }
-    }
-
     // Retain sparse depth guides for this build. They make it easy to see
     // whether the newly projected floor agrees with our established geometry.
     for (int depth = 1; depth <= 8; depth++) {
@@ -339,7 +407,7 @@ void first_person_render()
         double wallWorldY;
         tileToWorld(wall->tile, &wallWorldX, &wallWorldY);
         const int direction = ((wall->rotation % ROTATION_COUNT) + ROTATION_COUNT) % ROTATION_COUNT;
-        walls.push_back({ wall->fid, direction, wall->tile, wallWorldX, wallWorldY });
+        walls.push_back({ wall, wall->fid, direction, wall->tile, wallWorldX, wallWorldY });
         wallTiles.insert(wall->tile);
     }
 
@@ -489,6 +557,7 @@ void first_person_render()
                     if (z < depthBuffer[destination]) {
                         buffer[destination] = pixel;
                         depthBuffer[destination] = z;
+                        gFirstPersonPicks[destination] = { wall.object, wall.object->id };
                     }
                 }
             }
@@ -535,7 +604,7 @@ void first_person_render()
         }
 
         const int direction = ((object->rotation % ROTATION_COUNT) + ROTATION_COUNT) % ROTATION_COUNT;
-        objectSprites.push_back({ object->fid, object->frame, direction, type, cameraX, cameraZ });
+        objectSprites.push_back({ object, object->fid, object->frame, direction, type, cameraX, cameraZ });
     }
 
     std::sort(objectSprites.begin(), objectSprites.end(), [](const FirstPersonObjectSprite& a, const FirstPersonObjectSprite& b) {
@@ -595,12 +664,36 @@ void first_person_render()
                     if (object.z < depthBuffer[destination]) {
                         buffer[destination] = pixel;
                         depthBuffer[destination] = object.z;
+                        gFirstPersonPicks[destination] = { object.object, object.object->id };
                     }
                 }
             }
         }
 
         art_ptr_unlock(cacheEntry);
+    }
+
+    // Draw an explicit first-person pointer after our scene has covered the
+    // normal Fallout map cursor. This is intentionally simple and high contrast
+    // for the prototype; the important part is that its tip and highlighted
+    // engine hex now agree.
+    if (mouseX >= 0 && mouseX < width && mouseY >= 0 && mouseY < height) {
+        const int pointerColor = colorTable[31744];
+        const int pointerShadow = colorTable[0];
+        for (int i = 0; i <= 9; i++) {
+            if (mouseY + i < height) {
+                buffer[(mouseY + i) * width + mouseX] = pointerShadow;
+                if (mouseX + 1 < width) {
+                    buffer[(mouseY + i) * width + mouseX + 1] = pointerColor;
+                }
+            }
+            if (mouseX + i < width) {
+                buffer[mouseY * width + mouseX + i] = pointerShadow;
+                if (mouseY + 1 < height) {
+                    buffer[(mouseY + 1) * width + mouseX + i] = pointerColor;
+                }
+            }
+        }
     }
 
     draw_line(buffer, width, width / 2 - 7, height / 2, width / 2 + 7, height / 2, crosshairColor);

@@ -8,6 +8,7 @@
 #include "game/art.h"
 #include "game/combat.h"
 #include "game/critter.h"
+#include "game/first_person.h"
 #include "game/game.h"
 #include "game/gconfig.h"
 #include "game/gsound.h"
@@ -758,7 +759,10 @@ void gmouse_bk_process()
 
         char formattedActionPoints[8];
         int color;
-        int v6 = make_path(obj_dude, obj_dude->tile, obj_mouse_flat->tile, NULL, 1);
+        const int destination = first_person_is_enabled()
+            ? first_person_target_tile(mouseX, mouseY)
+            : obj_mouse_flat->tile;
+        int v6 = destination == -1 ? 0 : make_path(obj_dude, obj_dude->tile, destination, NULL, 1);
         if (v6) {
             if (!isInCombat()) {
                 formattedActionPoints[0] = '\0';
@@ -860,7 +864,7 @@ void gmouse_handle_event(int mouseX, int mouseY, int mouseState)
     }
 
     // CE: Make sure we cannot go outside of the map.
-    if (!tile_point_inside_bound(mouseX, mouseY)) {
+    if (!first_person_is_enabled() && !tile_point_inside_bound(mouseX, mouseY)) {
         return;
     }
 
@@ -1569,6 +1573,13 @@ Object* object_under_mouse(int objectType, bool a2, int elevation)
     int mouseY;
     mouse_get_position(&mouseX, &mouseY);
 
+    if (first_person_is_enabled()) {
+        if (win_get_top_win(mouseX, mouseY) != display_win) {
+            return nullptr;
+        }
+        return first_person_object_at(mouseX, mouseY, objectType, a2, elevation);
+    }
+
     bool v13 = false;
     if (objectType == -1) {
         if (square_roof_intersect(mouseX, mouseY, elevation)) {
@@ -2179,7 +2190,16 @@ static int gmouse_3d_move_to(int x, int y, int elevation, Rect* a4)
 
             obj_move(obj_mouse_flat, x + offsetX, y + offsetY, elevation, a4);
         } else {
-            int tile = tile_num(x, y, 0);
+            int tile = first_person_is_enabled()
+                ? first_person_target_tile(x, y)
+                : tile_num(x, y, 0);
+            if (first_person_is_enabled() && tile == -1) {
+                // Repaint the first-person pointer even over the sky. Do not
+                // move the engine hex cursor to an invalid tile; click and AP
+                // paths independently reject this missing ground intersection.
+                *a4 = { 0, 0, win_width(display_win) - 1, win_height(display_win) - 1 };
+                return 0;
+            }
             if (tile != -1) {
                 int screenX;
                 int screenY;

@@ -9,6 +9,7 @@
 #include "game/combatai.h"
 #include "game/critter.h"
 #include "game/display.h"
+#include "game/first_person.h"
 #include "game/game.h"
 #include "game/gconfig.h"
 #include "game/gmouse.h"
@@ -2978,7 +2979,9 @@ int check_move(int* a1)
     int y;
     mouse_get_position(&x, &y);
 
-    int tile = tile_num(x, y, map_elevation);
+    int tile = first_person_is_enabled()
+        ? first_person_target_tile(x, y)
+        : tile_num(x, y, map_elevation);
     if (tile == -1) {
         return -1;
     }
