@@ -43,7 +43,7 @@ struct FirstPersonWallSprite {
     int fid;
     int direction;
     int tile;
-    FirstPersonWallType wallType;
+    unsigned int extendedFlags;
     double worldX;
     double worldY;
 };
@@ -459,20 +459,22 @@ void first_person_render()
 
     // Debug geometry uses the same clipping/depth path as textured walls.
     static const bool debugWalls = std::getenv("FALLOUT_FP_WALL_DEBUG") != nullptr;
-    auto debugWallColor = [](FirstPersonWallType type) {
-        switch (type) {
-        case FirstPersonWallType::NorthSouth:
+    auto debugWallColor = [](FirstPersonWallKind kind) {
+        switch (kind) {
+        case FIRST_PERSON_WALL_NORTH_SOUTH:
             return 31744; // red
-        case FirstPersonWallType::EastWest:
+        case FIRST_PERSON_WALL_EAST_WEST:
             return 992; // green
-        case FirstPersonWallType::NorthCorner:
+        case FIRST_PERSON_WALL_NORTH_CORNER:
             return 31; // blue
-        case FirstPersonWallType::SouthCorner:
+        case FIRST_PERSON_WALL_SOUTH_CORNER:
             return 32736; // yellow
-        case FirstPersonWallType::EastCorner:
+        case FIRST_PERSON_WALL_EAST_CORNER:
             return 31775; // magenta
-        case FirstPersonWallType::WestCorner:
+        case FIRST_PERSON_WALL_WEST_CORNER:
             return 1023; // cyan
+        case FIRST_PERSON_WALL_UNKNOWN:
+            return 31744;
         }
         return 31744;
     };
@@ -516,8 +518,8 @@ void first_person_render()
             wall,
             wall->fid,
             direction,
+            extendedFlags,
             wall->tile,
-            first_person_wall_type(extendedFlags),
             wallWorldX,
             wallWorldY,
         });
@@ -529,8 +531,9 @@ void first_person_render()
     // adjacent blocker/decorative cells, which created false zigzags and
     // three/four-way junctions in the previous topology pass.
     for (const FirstPersonWallSprite& wall : walls) {
+        const FirstPersonWallKind wallKind = first_person_wall_kind(wall.extendedFlags);
         const auto segments = first_person_wall_segments(
-            wall.tile, wall.wallType, wall.worldX, wall.worldY);
+            wall.tile, wall.extendedFlags, wall.direction, wall.worldX, wall.worldY);
 
         CacheEntry* cacheEntry = nullptr;
         ArtFrame* frame = nullptr;
@@ -654,7 +657,7 @@ void first_person_render()
                         opaqueMinY,
                         opaqueMaxY);
                     const unsigned char pixel = debugWalls
-                        ? colorTable[debugWallColor(wall.wallType)]
+                        ? colorTable[debugWallColor(wallKind)]
                         : pixels[sourceY * frame->width + sourceX];
                     if (pixel == 0) {
                         continue;
