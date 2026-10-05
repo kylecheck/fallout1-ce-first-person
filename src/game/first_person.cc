@@ -48,6 +48,14 @@ struct FirstPersonWallSprite {
     double worldY;
 };
 
+struct FirstPersonWallMaterial {
+    int fid;
+    int direction;
+    int width;
+    int height;
+    std::vector<unsigned char> pixels;
+};
+
 struct FirstPersonObjectSprite {
     Object* object;
     int fid;
@@ -651,155 +659,219 @@ void first_person_render()
         walls.push_back(bridge);
     }
 
-    // Structural direction comes from each wall prototype's Wall Light Type.
-    // Native hex adjacency is intentionally not treated as connectivity: the
-    // diagnostic VAULTBUR map showed ordinary straight runs surrounded by
-    // adjacent blocker/decorative cells, which created false zigzags and
-    // three/four-way junctions in the previous topology pass.
+    // Build reusable first-person materials from the original isometric wall
+    // FRMs. The material owns copied pixels, so the art cache can be unlocked
+    // immediately and the same material can be shared by many wall segments.
+    std::vector<FirstPersonWallMaterial> wallMaterials;
+    auto getWallMaterial = [&wallMaterials](int fid, int direction) -> FirstPersonWallMaterial* {
+        for (FirstPersonWallMaterial& material : wallMaterials) {
+            if (material.fid == fid && material.direction == direction) {
+                return &material;
+            }
+        }
+
+        CacheEntry* cacheEntry = nullptr;
+        Art* art = art_ptr_lock(fid, &cacheEntry);
+        if (art == nullptr) {
+            return nullptr;
+        }
+
+        ArtFrame* frame = frame_ptr(art, 0, direction);
+        unsigned char* pixels = art_frame_data(art, 0, direction);
+        if (frame == nullptr || pixels == nullptr || frame->width <= 0 || frame->height <= 0) {
+            art_ptr_unlock(cacheEntry);
+            return nullptr;
+        }
+
+        int opaqueMinX = frame->width;
+        int opaqueMaxX = -1;
+        int opaqueMinY = frame->height;
+        int opaqueMaxY = -1;
+        std::vector<int> rowOpaqueMinX(frame->height, frame->width);
+        std::vector<int> rowOpaqueMaxX(frame->height, -1);
+
+        for (int sy = 0; sy < frame->height; sy++) {
+            for (int sx = 0; sx < frame->width; sx++) {
+                if (pixels[sy * frame->width + sx] != 0) {
+                    rowOpaqueMinX[sy] = std::min(rowOpaqueMinX[sy], sx);
+                    rowOpaqueMaxX[sy] = std::max(rowOpaqueMaxX[sy], sx);
+                    opaqueMinX = std::min(opaqueMinX, sx);
+                    opaqueMaxX = std::max(opaqueMaxX, sx);
+                    opaqueMinY = std::min(opaqueMinY, sy);
+                    opaqueMaxY = std::max(opaqueMaxY, sy);
+                }
+            }
+        }
+
+        if (opaqueMaxX < opaqueMinX || opaqueMaxY < opaqueMinY) {
+            art_ptr_unlock(cacheEntry);
+            return nullptr;
+        }
+
+        const int materialWidth = opaqueMaxX - opaqueMinX + 1;
+        const int materialHeight = opaqueMaxY - opaqueMinY + 1;
+        std::vector<unsigned char> rectified(
+            static_cast<size_t>(materialWidth) * materialHeight, 0);
+
+        // Preserve source texture scale instead of stretching every scanline
+        // independently. Align each row by its opaque center, then repeat only
+        // its edge texels where the isometric silhouette narrows. This removes
+        // the diagonal cutout while keeping bricks/panels far less warped.
+        for (int my = 0; my < materialHeight; my++) {
+            int sourceY = opaqueMinY + my;
+            if (rowOpaqueMaxX[sourceY] < rowOpaqueMinX[sourceY]) {
+                for (int radius = 1; radius < frame->height; radius++) {
+                    const int up = sourceY - radius;
+                    const int down = sourceY + radius;
+                    if (up >= opaqueMinY
+                        && rowOpaqueMaxX[up] >= rowOpaqueMinX[up]) {
+                        sourceY = up;
+                        break;
+                    }
+                    if (down <= opaqueMaxY
+                        && rowOpaqueMaxX[down] >= rowOpaqueMinX[down]) {
+                        sourceY = down;
+                        break;
+                    }
+                }
+            }
+
+            const int rowMinX = rowOpaqueMinX[sourceY];
+            const int rowMaxX = rowOpaqueMaxX[sourceY];
+            if (rowMaxX < rowMinX) {
+                continue;
+            }
+
+            const double rowCenter = (rowMinX + rowMaxX) * 0.5;
+            const double outputCenter = (materialWidth - 1) * 0.5;
+            for (int mx = 0; mx < materialWidth; mx++) {
+                int sourceX = static_cast<int>(std::lround(
+                    rowCenter + (mx - outputCenter)));
+                sourceX = std::clamp(sourceX, rowMinX, rowMaxX);
+
+                unsigned char pixel = pixels[sourceY * frame->width + sourceX];
+                if (pixel == 0) {
+                    for (int radius = 1; radius <= rowMaxX - rowMinX && pixel == 0; radius++) {
+                        const int leftX = sourceX - radius;
+                        const int rightX = sourceX + radius;
+                        if (leftX >= rowMinX) {
+                            pixel = pixels[sourceY * frame->width + leftX];
+                        }
+                        if (pixel == 0 && rightX <= rowMaxX) {
+                            pixel = pixels[sourceY * frame->width + rightX];
+                        }
+                    }
+                }
+
+                rectified[my * materialWidth + mx] = pixel;
+            }
+        }
+
+        art_ptr_unlock(cacheEntry);
+        wallMaterials.push_back({
+            fid,
+            direction,
+            materialWidth,
+            materialHeight,
+            std::move(rectified),
+        });
+        return &wallMaterials.back();
+    };
+
+    auto straightMaterialForCornerArm = [&](const FirstPersonWallSprite& corner,
+                                           FirstPersonWallKind cornerKind,
+                                           const FirstPersonWallSegment& segment)
+        -> const FirstPersonWallSprite* {
+        if (!first_person_wall_is_corner(cornerKind)) {
+            return &corner;
+        }
+
+        const bool horizontal =
+            std::abs(segment.bx - segment.ax) >= std::abs(segment.by - segment.ay);
+        const int delta = first_person_corner_neighbor_delta(cornerKind, horizontal);
+        if (delta == 0) {
+            return &corner;
+        }
+
+        const FirstPersonWallKind desired = horizontal
+            ? FIRST_PERSON_WALL_EAST_WEST
+            : FIRST_PERSON_WALL_NORTH_SOUTH;
+
+        int tile = corner.tile + delta;
+        for (int step = 1; step <= 6; step++, tile += delta) {
+            const FirstPersonWallSprite* candidate = wallAtTile(tile);
+            if (candidate != nullptr) {
+                if (first_person_wall_kind(candidate->extendedFlags) == desired) {
+                    return candidate;
+                }
+                // A different visible wall class is a real topology boundary;
+                // don't borrow a texture through it.
+                return &corner;
+            }
+
+            // Only look farther when the map explicitly supplies blocker
+            // topology. This avoids stealing a material from a nearby room.
+            if (!blockAtTile(tile)) {
+                break;
+            }
+        }
+
+        return &corner;
+    };
+
+    constexpr double kStructuralWallHeight = 1.65;
+
+    // Structural geometry and wall material are deliberately separate. Straight
+    // pieces keep their own art; each corner arm first tries to borrow the
+    // continuation wall's clean straight material. This avoids folding one
+    // isometric corner sprite around two perpendicular first-person planes.
     for (const FirstPersonWallSprite& wall : walls) {
-        const FirstPersonWallKind wallKind = first_person_wall_kind(wall.extendedFlags);
+        const FirstPersonWallKind wallKind =
+            first_person_wall_kind(wall.extendedFlags);
         const auto segments = first_person_wall_segments(
             wall.tile, wall.extendedFlags, wall.direction, wall.worldX, wall.worldY);
 
-        CacheEntry* cacheEntry = nullptr;
-        ArtFrame* frame = nullptr;
-        unsigned char* pixels = nullptr;
-        int opaqueMinX = 0;
-        int opaqueMaxX = 0;
-        int opaqueMinY = 0;
-        int opaqueMaxY = 0;
-        std::vector<int> rowOpaqueMinX;
-        std::vector<int> rowOpaqueMaxX;
-        std::vector<unsigned char> rectifiedWallPixels;
-        int rectifiedWidth = 0;
-        int rectifiedHeight = 0;
-        if (!debugWalls) {
-            Art* art = art_ptr_lock(wall.fid, &cacheEntry);
-            if (art == nullptr) {
-                continue;
+        for (const FirstPersonWallSegment& sourceSegment : segments) {
+            const FirstPersonWallSprite* materialWall = &wall;
+            if (!debugWalls && first_person_wall_is_corner(wallKind)) {
+                materialWall =
+                    straightMaterialForCornerArm(wall, wallKind, sourceSegment);
             }
 
-            frame = frame_ptr(art, 0, wall.direction);
-            pixels = art_frame_data(art, 0, wall.direction);
-            if (frame == nullptr || pixels == nullptr || frame->width <= 0 || frame->height <= 0) {
-                art_ptr_unlock(cacheEntry);
-                continue;
-            }
-
-            // Find the opaque art bounds. Sampling only this region prevents the
-            // large transparent margins/anchors in isometric FRMs from becoming
-            // stretched empty sections of a first-person wall.
-            opaqueMinX = frame->width;
-            opaqueMaxX = -1;
-            opaqueMinY = frame->height;
-            opaqueMaxY = -1;
-            rowOpaqueMinX.assign(frame->height, frame->width);
-            rowOpaqueMaxX.assign(frame->height, -1);
-            for (int sy = 0; sy < frame->height; sy++) {
-                for (int sx = 0; sx < frame->width; sx++) {
-                    if (pixels[sy * frame->width + sx] != 0) {
-                        rowOpaqueMinX[sy] = std::min(rowOpaqueMinX[sy], sx);
-                        rowOpaqueMaxX[sy] = std::max(rowOpaqueMaxX[sy], sx);
-                        opaqueMinX = std::min(opaqueMinX, sx);
-                        opaqueMaxX = std::max(opaqueMaxX, sx);
-                        opaqueMinY = std::min(opaqueMinY, sy);
-                        opaqueMaxY = std::max(opaqueMaxY, sy);
-                    }
+            FirstPersonWallMaterial* material = nullptr;
+            if (!debugWalls) {
+                material = getWallMaterial(materialWall->fid, materialWall->direction);
+                if (material == nullptr || material->width <= 0 || material->height <= 0) {
+                    // If an adjacent borrowed material is unavailable, fall
+                    // back to the corner's own art before dropping geometry.
+                    material = getWallMaterial(wall.fid, wall.direction);
+                    materialWall = &wall;
                 }
-            }
-            if (opaqueMaxX < opaqueMinX || opaqueMaxY < opaqueMinY) {
-                art_ptr_unlock(cacheEntry);
-                continue;
-            }
-
-            // Build a rectangular first-person material once per wall object.
-            // Each output row stretches only that FRM scanline's opaque span
-            // across the wall. Transparent holes inside the span are repaired
-            // from the nearest opaque texel so the 2D cutout mask cannot punch
-            // accidental holes through structural geometry.
-            rectifiedWidth = opaqueMaxX - opaqueMinX + 1;
-            rectifiedHeight = opaqueMaxY - opaqueMinY + 1;
-            rectifiedWallPixels.assign(
-                static_cast<size_t>(rectifiedWidth) * rectifiedHeight, 0);
-
-            for (int ry = 0; ry < rectifiedHeight; ry++) {
-                int sourceY = opaqueMinY + ry;
-                if (rowOpaqueMaxX[sourceY] < rowOpaqueMinX[sourceY]) {
-                    for (int radius = 1; radius < frame->height; radius++) {
-                        const int up = sourceY - radius;
-                        const int down = sourceY + radius;
-                        if (up >= opaqueMinY
-                            && rowOpaqueMaxX[up] >= rowOpaqueMinX[up]) {
-                            sourceY = up;
-                            break;
-                        }
-                        if (down <= opaqueMaxY
-                            && rowOpaqueMaxX[down] >= rowOpaqueMinX[down]) {
-                            sourceY = down;
-                            break;
-                        }
-                    }
-                }
-
-                const int rowMinX = rowOpaqueMinX[sourceY];
-                const int rowMaxX = rowOpaqueMaxX[sourceY];
-                if (rowMaxX < rowMinX) {
+                if (material == nullptr || material->width <= 0 || material->height <= 0) {
                     continue;
                 }
-
-                for (int rx = 0; rx < rectifiedWidth; rx++) {
-                    const double materialU = rectifiedWidth > 1
-                        ? static_cast<double>(rx) / (rectifiedWidth - 1)
-                        : 0.0;
-                    const int sourceX = std::clamp(
-                        rowMinX + static_cast<int>(std::lround(
-                            materialU * (rowMaxX - rowMinX))),
-                        rowMinX,
-                        rowMaxX);
-
-                    unsigned char pixel = pixels[sourceY * frame->width + sourceX];
-                    if (pixel == 0) {
-                        for (int radius = 1; radius <= rowMaxX - rowMinX && pixel == 0; radius++) {
-                            const int leftX = sourceX - radius;
-                            const int rightX = sourceX + radius;
-                            if (leftX >= rowMinX) {
-                                pixel = pixels[sourceY * frame->width + leftX];
-                            }
-                            if (pixel == 0 && rightX <= rowMaxX) {
-                                pixel = pixels[sourceY * frame->width + rightX];
-                            }
-                        }
-                    }
-                    rectifiedWallPixels[ry * rectifiedWidth + rx] = pixel;
-                }
             }
 
-        }
+            FirstPersonWallSegment materialSegment = sourceSegment;
+            if (materialWall != &wall && first_person_wall_is_corner(wallKind)) {
+                // Borrowed straight art should cover the whole corner arm.
+                // Preserve the arm's original texture direction so patterns do
+                // not flip at the join.
+                const bool reversed = sourceSegment.u1 < sourceSegment.u0;
+                materialSegment.u0 = reversed ? 1.0 : 0.0;
+                materialSegment.u1 = reversed ? 0.0 : 1.0;
+            }
 
-        // FRM reconstruction is a separate material approximation: keep its
-        // existing crop and height scaling, never its width/anchor as topology.
-        const int opaqueHeight = opaqueMaxY - opaqueMinY + 1;
-        const double worldHeight = debugWalls ? 1.65
-            : std::clamp(opaqueHeight * (1.65 / 110.0), 0.65, 1.85);
-
-        for (const FirstPersonWallSegment& sourceSegment : segments) {
-            const double joinOverlap = wallKind == FIRST_PERSON_WALL_NORTH_CORNER
-                    || wallKind == FIRST_PERSON_WALL_SOUTH_CORNER
-                    || wallKind == FIRST_PERSON_WALL_EAST_CORNER
-                    || wallKind == FIRST_PERSON_WALL_WEST_CORNER
+            const double joinOverlap = first_person_wall_is_corner(wallKind)
                 ? 0.055
                 : 0.035;
             const FirstPersonWallSegment segment =
-                first_person_overlap_wall_segment(sourceSegment, joinOverlap);
+                first_person_overlap_wall_segment(materialSegment, joinOverlap);
 
-            const double endpointAX = segment.ax;
-            const double endpointAY = segment.ay;
-            const double endpointBX = segment.bx;
-            const double endpointBY = segment.by;
-            const double adx = endpointAX - playerWorldX;
-            const double ady = endpointAY - playerWorldY;
-            const double bdx = endpointBX - playerWorldX;
-            const double bdy = endpointBY - playerWorldY;
+            const double adx = segment.ax - playerWorldX;
+            const double ady = segment.ay - playerWorldY;
+            const double bdx = segment.bx - playerWorldX;
+            const double bdy = segment.by - playerWorldY;
             double ax = adx * rightX + ady * rightY;
             double az = adx * forwardX + ady * forwardY;
             double bx = bdx * rightX + bdy * rightY;
@@ -815,8 +887,8 @@ void first_person_render()
             const int screenBX = width / 2 + static_cast<int>(bx * focal / bz);
             const int bottomAY = horizon + static_cast<int>(focal * kEyeHeight / az);
             const int bottomBY = horizon + static_cast<int>(focal * kEyeHeight / bz);
-            const int topAY = bottomAY - static_cast<int>(focal * worldHeight / az);
-            const int topBY = bottomBY - static_cast<int>(focal * worldHeight / bz);
+            const int topAY = bottomAY - static_cast<int>(focal * kStructuralWallHeight / az);
+            const int topBY = bottomBY - static_cast<int>(focal * kStructuralWallHeight / bz);
 
             const int minX = std::max(0, std::min(screenAX, screenBX));
             const int maxX = std::min(width - 1, std::max(screenAX, screenBX));
@@ -829,8 +901,6 @@ void first_person_render()
                 continue;
             }
 
-            // Perspective-correct interpolation along the wall. 1/z is linear in
-            // screen space, so it supplies both depth testing and texture position.
             const double invAz = 1.0 / az;
             const double invBz = 1.0 / bz;
             for (int screenX = minX; screenX <= maxX; screenX++) {
@@ -843,16 +913,22 @@ void first_person_render()
                 if (invZ <= 0.0) {
                     continue;
                 }
+
                 const double z = 1.0 / invZ;
-                const double worldT = ((1.0 - s) * u0 * invAz + s * u1 * invBz) / invZ;
-                const int bottom = static_cast<int>(bottomAY + (bottomBY - bottomAY) * s);
-                const int top = static_cast<int>(topAY + (topBY - topAY) * s);
+                const double worldT =
+                    ((1.0 - s) * u0 * invAz + s * u1 * invBz) / invZ;
+                const int bottom = static_cast<int>(
+                    bottomAY + (bottomBY - bottomAY) * s);
+                const int top = static_cast<int>(
+                    topAY + (topBY - topAY) * s);
                 const int columnHeight = bottom - top;
                 if (columnHeight <= 0) {
                     continue;
                 }
 
-                for (int screenY = std::max(0, top); screenY <= std::min(height - 1, bottom); screenY++) {
+                for (int screenY = std::max(0, top);
+                     screenY <= std::min(height - 1, bottom);
+                     screenY++) {
                     unsigned char pixel;
                     if (debugWalls) {
                         pixel = colorTable[debugWallColor(wallKind)];
@@ -860,15 +936,15 @@ void first_person_render()
                         const double materialU = std::clamp(worldT, 0.0, 1.0);
                         const int materialX = std::clamp(
                             static_cast<int>(std::lround(
-                                materialU * std::max(0, rectifiedWidth - 1))),
+                                materialU * std::max(0, material->width - 1))),
                             0,
-                            std::max(0, rectifiedWidth - 1));
+                            std::max(0, material->width - 1));
                         const int materialY = std::clamp(
-                            (screenY - top) * rectifiedHeight / columnHeight,
+                            (screenY - top) * material->height / columnHeight,
                             0,
-                            std::max(0, rectifiedHeight - 1));
-                        pixel = rectifiedWallPixels[
-                            materialY * rectifiedWidth + materialX];
+                            std::max(0, material->height - 1));
+                        pixel = material->pixels[
+                            materialY * material->width + materialX];
                         if (pixel == 0) {
                             continue;
                         }
@@ -878,14 +954,13 @@ void first_person_render()
                     if (z < depthBuffer[destination]) {
                         buffer[destination] = pixel;
                         depthBuffer[destination] = z;
-                        gFirstPersonPicks[destination] = { wall.object, wall.object->id };
+                        gFirstPersonPicks[destination] = {
+                            wall.object,
+                            wall.object->id,
+                        };
                     }
                 }
             }
-        }
-
-        if (cacheEntry != nullptr) {
-            art_ptr_unlock(cacheEntry);
         }
     }
 
