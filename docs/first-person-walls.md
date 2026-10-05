@@ -592,3 +592,19 @@ Input should expose the right stick as a normal gamepad/joystick axis, while
 the right trackpad remains mouse input for Fallout's cursor and UI. Left-stick
 camera-relative hex movement is the next controller milestone after this
 free-look path is validated.
+
+
+## Vertical controller free look
+
+Native right-stick look now consumes both SDL controller axes. Horizontal motion
+continues to rotate the camera freely; vertical motion adds a clamped pitch
+range of roughly +/-18 degrees at about 90 degrees/second.
+
+The software renderer implements pitch by shifting the shared projection
+horizon. Floor sampling, wall/object projection, target-tile conversion, and
+the pick buffer all use that same pitch-aware horizon so visual aiming and
+native hex targeting stay aligned.
+
+The right stick must be exposed by Steam Input as a normal joystick/gamepad
+stick. It should not also emit mouse movement; the right trackpad remains the
+dedicated Fallout mouse cursor.
