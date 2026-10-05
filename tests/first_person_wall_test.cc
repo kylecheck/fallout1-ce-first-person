@@ -131,6 +131,19 @@ int main()
         assert(endpoint_matches(south[1], southVertical[0]));
     }
 
+    // Corner material/topology lookup must follow the same continuations as
+    // the structural geometry.
+    assert(first_person_wall_is_corner(FIRST_PERSON_WALL_NORTH_CORNER));
+    assert(!first_person_wall_is_corner(FIRST_PERSON_WALL_NORTH_SOUTH));
+    assert(first_person_corner_neighbor_delta(FIRST_PERSON_WALL_NORTH_CORNER, true) == 1);
+    assert(first_person_corner_neighbor_delta(FIRST_PERSON_WALL_NORTH_CORNER, false) == 200);
+    assert(first_person_corner_neighbor_delta(FIRST_PERSON_WALL_SOUTH_CORNER, true) == -1);
+    assert(first_person_corner_neighbor_delta(FIRST_PERSON_WALL_SOUTH_CORNER, false) == -200);
+    assert(first_person_corner_neighbor_delta(FIRST_PERSON_WALL_EAST_CORNER, true) == 1);
+    assert(first_person_corner_neighbor_delta(FIRST_PERSON_WALL_EAST_CORNER, false) == -200);
+    assert(first_person_corner_neighbor_delta(FIRST_PERSON_WALL_WEST_CORNER, true) == -1);
+    assert(first_person_corner_neighbor_delta(FIRST_PERSON_WALL_WEST_CORNER, false) == 200);
+
     // Unknown/custom types retain deterministic fallback geometry.
     {
         const auto fallback = segments(20100, 0x18000000u, 2);
