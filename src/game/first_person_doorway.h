@@ -26,6 +26,11 @@ inline int first_person_doorway_gap(const char* a, int tileA, unsigned int flags
         && tileB == tileA + 400) {
         return tileA + 200;
     }
+    if (std::strcmp(a, "velvdr04.frm") == 0 && std::strcmp(b, "velvdr03.frm") == 0
+        && kindA == FIRST_PERSON_WALL_EAST_WEST && kindB == kindA
+        && tileB == tileA + 4 && tileA / 200 == tileB / 200) {
+        return tileA + 1;
+    }
     return -1;
 }
 

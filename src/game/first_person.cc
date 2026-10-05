@@ -1,6 +1,7 @@
 #include "game/first_person.h"
 #include "game/first_person_wall.h"
 #include "game/first_person_doorway.h"
+#include "game/first_person_material.h"
 
 #include <algorithm>
 #include <cmath>
@@ -50,6 +51,8 @@ struct FirstPersonWallSprite {
     double worldY;
     double baseHeight = 0.0;
     double materialVMax = 1.0;
+    double materialUMin = 0.0;
+    double materialUMax = 1.0;
 };
 
 struct FirstPersonWallMaterial {
@@ -175,9 +178,9 @@ Object* first_person_object_at(int screenX, int screenY, int objectType, bool in
 }
 
 // The topology table cannot identify the shape of generic scenery. Export
-// nearby unique source frames alongside it, only during an explicit map dump.
+// unique source frames on this elevation, only during an explicit map dump.
 // Indexed pixels preserve transparency (index 0); palette components are 0..63.
-static void first_person_dump_nearby_art(const char* mapPath)
+static void first_person_dump_art(const char* mapPath)
 {
     char path[4096];
     const int length = std::snprintf(path, sizeof(path), "%s.art.txt", mapPath);
@@ -201,7 +204,7 @@ static void first_person_dump_nearby_art(const char* mapPath)
          object != nullptr; object = obj_find_next_at()) {
         const int type = FID_TYPE(object->fid);
         if ((type != OBJ_TYPE_WALL && type != OBJ_TYPE_SCENERY)
-            || object->tile < 0 || tile_dist(obj_dude->tile, object->tile) > 18) {
+            || object->tile < 0) {
             continue;
         }
         const int direction = ((object->rotation % ROTATION_COUNT) + ROTATION_COUNT) % ROTATION_COUNT;
@@ -310,7 +313,7 @@ static void first_person_dump_map()
         std::fprintf(stderr, "First-person map dump failed: %s\n", path);
     } else {
         std::fprintf(stderr, "First-person map dump saved: %s\n", path);
-        first_person_dump_nearby_art(path);
+        first_person_dump_art(path);
     }
 }
 
@@ -807,7 +810,7 @@ void first_person_render()
     // FRMs. The material owns copied pixels, so the art cache can be unlocked
     // immediately and the same material can be shared by many wall segments.
     std::vector<FirstPersonWallMaterial> wallMaterials;
-    auto getWallMaterial = [&wallMaterials](int fid, int direction) -> FirstPersonWallMaterial* {
+    auto getWallMaterial = [&wallMaterials](int fid, int direction, unsigned int extendedFlags) -> FirstPersonWallMaterial* {
         for (FirstPersonWallMaterial& material : wallMaterials) {
             if (material.fid == fid && material.direction == direction) {
                 return &material;
@@ -825,6 +828,26 @@ void first_person_render()
         if (frame == nullptr || pixels == nullptr || frame->width <= 0 || frame->height <= 0) {
             art_ptr_unlock(cacheEntry);
             return nullptr;
+        }
+
+        // Straight faces can be unsheared by column. Corner FRMs contain two
+        // faces and retain the existing fallback; their arms normally borrow
+        // a straight continuation material below.
+        static const bool legacyMaterials = std::getenv("FALLOUT_FP_MATERIAL_LEGACY") != nullptr;
+        const FirstPersonWallKind materialKind = first_person_wall_kind(extendedFlags);
+        if (!legacyMaterials
+            && (materialKind == FIRST_PERSON_WALL_NORTH_SOUTH
+                || materialKind == FIRST_PERSON_WALL_EAST_WEST)) {
+            char name[64] = { 0 };
+            art_get_base_name(FID_TYPE(fid), fid & 0xFFF, name);
+            auto face = first_person_rectify_columns(pixels, frame->width, frame->height,
+                first_person_material_has_opening(name));
+            art_ptr_unlock(cacheEntry);
+            if (face.width <= 0 || face.height <= 0) {
+                return nullptr;
+            }
+            wallMaterials.push_back({ fid, direction, face.width, face.height, std::move(face.pixels) });
+            return &wallMaterials.back();
         }
 
         int opaqueMinX = frame->width;
@@ -946,7 +969,11 @@ void first_person_render()
             const FirstPersonWallSprite* candidate = wallAtTile(tile);
             if (candidate != nullptr) {
                 if (first_person_wall_kind(candidate->extendedFlags) == desired) {
-                    return candidate;
+                    char name[64] = { 0 };
+                    art_get_base_name(OBJ_TYPE_WALL, candidate->fid & 0xFFF, name);
+                    // A post/window is not a solid continuation texture. Never
+                    // copy its transparent opening onto an unrelated corner.
+                    return first_person_material_has_opening(name) ? &corner : candidate;
                 }
                 // A different visible wall class is a real topology boundary;
                 // don't borrow a texture through it.
@@ -974,10 +1001,12 @@ void first_person_render()
         char nameA[64] = { 0 };
         art_get_base_name(OBJ_TYPE_WALL, a.fid & 0xFFF, nameA);
         if (std::strcmp(nameA, "dv1036.frm") != 0
-            && std::strcmp(nameA, "dv1043.frm") != 0) {
+            && std::strcmp(nameA, "dv1043.frm") != 0
+            && std::strcmp(nameA, "velvdr04.frm") != 0) {
             continue;
         }
-        const int delta = std::strcmp(nameA, "dv1036.frm") == 0 ? 2 : 400;
+        const bool elevator = std::strcmp(nameA, "velvdr04.frm") == 0;
+        const int delta = elevator ? 4 : (std::strcmp(nameA, "dv1036.frm") == 0 ? 2 : 400);
         const FirstPersonWallSprite* b = wallAtTile(a.tile + delta);
         if (b == nullptr || b->object->tile != b->tile) {
             continue;
@@ -986,17 +1015,31 @@ void first_person_render()
         art_get_base_name(OBJ_TYPE_WALL, b->fid & 0xFFF, nameB);
         const int gap = first_person_doorway_gap(nameA, a.tile, a.extendedFlags,
             nameB, b->tile, b->extendedFlags);
-        if (gap < 0 || wallAtTile(gap) != nullptr || blockAtTile(gap) || doorAtTile(gap)) {
+        if (gap < 0) {
             continue;
         }
-        // The horizontal pair's second piece and vertical pair's first piece
-        // contain the broad overhead trim in the verified source artwork.
-        FirstPersonWallSprite lintel = delta == 2 ? *b : a;
-        lintel.tile = gap;
-        tileToWorld(gap, &lintel.worldX, &lintel.worldY);
-        lintel.baseHeight = 1.35;
-        lintel.materialVMax = 0.28;
-        renderedWalls.push_back(lintel);
+        const int spanCount = elevator ? 3 : 1;
+        bool clear = true;
+        for (int i = 0; i < spanCount; i++) {
+            const int tile = gap + i;
+            if (wallAtTile(tile) != nullptr || blockAtTile(tile) || doorAtTile(tile)) {
+                clear = false;
+            }
+        }
+        if (!clear) {
+            continue;
+        }
+        for (int i = 0; i < spanCount; i++) {
+            // Keep one continuous header texture across multi-cell openings.
+            FirstPersonWallSprite lintel = delta == 400 ? a : *b;
+            lintel.tile = gap + i;
+            tileToWorld(lintel.tile, &lintel.worldX, &lintel.worldY);
+            lintel.baseHeight = 1.35;
+            lintel.materialVMax = 0.28;
+            lintel.materialUMin = (spanCount - i - 1) / static_cast<double>(spanCount);
+            lintel.materialUMax = (spanCount - i) / static_cast<double>(spanCount);
+            renderedWalls.push_back(lintel);
+        }
     }
 
     constexpr double kStructuralWallHeight = 1.65;
@@ -1020,11 +1063,11 @@ void first_person_render()
 
             FirstPersonWallMaterial* material = nullptr;
             if (!debugWalls) {
-                material = getWallMaterial(materialWall->fid, materialWall->direction);
+                material = getWallMaterial(materialWall->fid, materialWall->direction, materialWall->extendedFlags);
                 if (material == nullptr || material->width <= 0 || material->height <= 0) {
                     // If an adjacent borrowed material is unavailable, fall
                     // back to the corner's own art before dropping geometry.
-                    material = getWallMaterial(wall.fid, wall.direction);
+                    material = getWallMaterial(wall.fid, wall.direction, wall.extendedFlags);
                     materialWall = &wall;
                 }
                 if (material == nullptr || material->width <= 0 || material->height <= 0) {
@@ -1041,6 +1084,11 @@ void first_person_render()
                 materialSegment.u0 = reversed ? 1.0 : 0.0;
                 materialSegment.u1 = reversed ? 0.0 : 1.0;
             }
+
+            materialSegment.u0 = wall.materialUMin
+                + (wall.materialUMax - wall.materialUMin) * materialSegment.u0;
+            materialSegment.u1 = wall.materialUMin
+                + (wall.materialUMax - wall.materialUMin) * materialSegment.u1;
 
             const double joinOverlap = first_person_wall_is_corner(wallKind)
                 ? 0.055
@@ -1193,7 +1241,7 @@ void first_person_render()
             }
             art_ptr_unlock(entry);
         } else {
-            material = getWallMaterial(door.fid, door.direction);
+            material = getWallMaterial(door.fid, door.direction, door.extendedFlags);
         }
         if (material == nullptr || material->width <= 0 || material->height <= 0) {
             continue;

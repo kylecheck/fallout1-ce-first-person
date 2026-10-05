@@ -359,3 +359,44 @@ This is an asset-specific first structural scenery profile. The world placement
 and material orientation require Deck validation; it is still a flat frame
 without jamb thickness or a modeled back face. Elevator artwork and unrelated
 openings are not classified from this asset.
+
+## Broad straight-face material and opening pass
+
+Single-face north/south and east/west wall textures now undo isometric shear
+by source column: retain each column's horizontal location, start it at its
+first opaque pixel, and use the greatest opaque column span as face height.
+Solid materials repair empty samples only within their own column and repeat
+its bottom edge where necessary. This replaces horizontal scanline shifting,
+which folded posts into stripes and dragged unrelated pixels into openings.
+Corner and unknown-class fallback materials retain their existing transform;
+corner arms still prefer their compatible straight continuation art.
+
+Verified window/doorway profiles (`dv1010` through `dv1013`, `dv1035`, `dv1036`,
+`dv1043`, `dv1044`, `velvdr03`, and `velvdr04`) preserve transparent interior
+pixels and short/header-only columns. Corner arms do not borrow these cutout
+materials, so a nearby window cannot create a new hole in a solid corner.
+The transform was visually checked against the exported original frames.
+
+The elevator wall-frame pair `velvdr04.frm`/`velvdr03.frm` at 14302/14306
+establishes a three-cell overhead span. The profile requires exact artwork,
+matching east/west classes, and same-row four-column separation. Existing
+visible walls, wall blockers, or native doors within the span reject it;
+scenery collision helpers retain their native behavior. The upper trim texture
+is divided continuously across the three overhead cells, not repeated on each.
+
+Wall segment positions, movement, collision, and native use behavior remain
+unchanged. Frames remain flat and do not yet have modeled jamb thickness. The
+newly transparent visual openings do not grant movement through native walls.
+Material orientation/appearance and the elevator trim require Deck review.
+For a comparison launch, `FALLOUT_FP_MATERIAL_LEGACY=1` restores the prior
+material transform; it does not change topology or the new overhead profiles.
+
+Explicit map/art exports now include unique wall/scenery frames for the whole
+current elevation. This supersedes the earlier 18-hex art-export limit and
+avoids repeated exports merely because another structural scenery object is
+farther down the corridor. Exports remain opt-in and run once per process.
+
+`tests/first_person_material_test.cc` verifies shear removal, interior alpha,
+header-only columns, solid face filling, and empty input. The doorway suite now
+includes the elevator pairing and wrong-spacing rejection; existing wall
+geometry regression tests remain unchanged.
