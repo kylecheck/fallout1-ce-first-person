@@ -889,14 +889,21 @@ int game_handle_input(int eventCode, bool isInCombatMode)
         break;
     case KEY_ARROW_LEFT:
         if (first_person_is_enabled()) {
-            first_person_turn(-1);
+            // Steam Input can still emit the legacy arrow binding while the
+            // native left stick is held. Do not let that duplicate input yaw
+            // the camera immediately before a lateral native hex move.
+            if (!first_person_controller_move_active()) {
+                first_person_turn(-1);
+            }
         } else {
             map_scroll(-1, 0);
         }
         break;
     case KEY_ARROW_RIGHT:
         if (first_person_is_enabled()) {
-            first_person_turn(1);
+            if (!first_person_controller_move_active()) {
+                first_person_turn(1);
+            }
         } else {
             map_scroll(1, 0);
         }
