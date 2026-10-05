@@ -270,11 +270,12 @@ static void first_person_update_controller_look()
     // positive camera pitch. Pitch deliberately stays modest because Fallout's
     // maps have no true ceiling/floor geometry above and below the play plane.
     constexpr double kPitchDegreesPerSecond = 90.0;
-    constexpr double kPitchLimitDegrees = 18.0;
+    constexpr double kPitchUpLimitDegrees = 18.0;
+    constexpr double kPitchDownLimitDegrees = 40.0;
     gFirstPersonPitchDegrees = std::clamp(
         gFirstPersonPitchDegrees - pitchAxis * kPitchDegreesPerSecond * dt,
-        -kPitchLimitDegrees,
-        kPitchLimitDegrees);
+        -kPitchDownLimitDegrees,
+        kPitchUpLimitDegrees);
 
     gFirstPersonCameraRevision++;
     gFirstPersonPicks.clear();
