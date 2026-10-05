@@ -474,7 +474,7 @@ void first_person_render()
         case FIRST_PERSON_WALL_WEST_CORNER:
             return 1023; // cyan
         case FIRST_PERSON_WALL_UNKNOWN:
-            return 31744;
+            return 32767; // white
         }
         return 31744;
     };
@@ -518,8 +518,8 @@ void first_person_render()
             wall,
             wall->fid,
             direction,
-            extendedFlags,
             wall->tile,
+            extendedFlags,
             wallWorldX,
             wallWorldY,
         });
