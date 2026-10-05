@@ -35,6 +35,107 @@
 
 namespace fallout {
 
+enum class FirstPersonWeaponPose {
+    Lowered,
+    Ready,
+    Attack,
+    Reload,
+};
+
+struct FirstPersonWeaponProfile {
+    double loweredWidth;
+    double readyWidth;
+    double attackWidth;
+    double reloadWidth;
+    double horizontalCenter;
+    double loweredBottom;
+    double readyBottom;
+    double attackBottom;
+    double reloadBottom;
+};
+
+static FirstPersonWeaponProfile first_person_weapon_profile(int weaponAnimationCode)
+{
+    FirstPersonWeaponProfile profile {
+        0.34, 0.40, 0.43, 0.38,
+        0.68,
+        1.04, 0.945, 0.90, 0.98,
+    };
+
+    switch (weaponAnimationCode) {
+    case WEAPON_ANIMATION_PISTOL:
+        profile.horizontalCenter = 0.70;
+        profile.loweredWidth = 0.30;
+        profile.readyWidth = 0.36;
+        profile.attackWidth = 0.39;
+        break;
+    case WEAPON_ANIMATION_SMG:
+        profile.horizontalCenter = 0.68;
+        profile.loweredWidth = 0.34;
+        profile.readyWidth = 0.40;
+        profile.attackWidth = 0.44;
+        break;
+    case WEAPON_ANIMATION_SHOTGUN:
+    case WEAPON_ANIMATION_LASER_RIFLE:
+        profile.horizontalCenter = 0.64;
+        profile.loweredWidth = 0.40;
+        profile.readyWidth = 0.46;
+        profile.attackWidth = 0.50;
+        break;
+    case WEAPON_ANIMATION_MINIGUN:
+    case WEAPON_ANIMATION_LAUNCHER:
+        profile.horizontalCenter = 0.60;
+        profile.loweredWidth = 0.46;
+        profile.readyWidth = 0.52;
+        profile.attackWidth = 0.56;
+        break;
+    case WEAPON_ANIMATION_KNIFE:
+    case WEAPON_ANIMATION_CLUB:
+    case WEAPON_ANIMATION_HAMMER:
+    case WEAPON_ANIMATION_SPEAR:
+        profile.horizontalCenter = 0.72;
+        profile.loweredWidth = 0.28;
+        profile.readyWidth = 0.34;
+        profile.attackWidth = 0.40;
+        break;
+    default:
+        break;
+    }
+
+    profile.reloadWidth = profile.readyWidth * 0.94;
+    return profile;
+}
+
+static FirstPersonWeaponPose first_person_weapon_pose(int hitMode)
+{
+    if (hitMode == HIT_MODE_LEFT_WEAPON_RELOAD
+        || hitMode == HIT_MODE_RIGHT_WEAPON_RELOAD) {
+        return FirstPersonWeaponPose::Reload;
+    }
+
+    if (obj_dude != nullptr) {
+        const int animation = FID_ANIM_TYPE(obj_dude->fid);
+        if (animation == ANIM_PARRY_ANIM
+            || animation == ANIM_THRUST_ANIM
+            || animation == ANIM_SWING_ANIM
+            || animation == ANIM_POINT
+            || animation == ANIM_FIRE_SINGLE
+            || animation == ANIM_FIRE_BURST
+            || animation == ANIM_FIRE_CONTINUOUS
+            || animation == ANIM_THROW_PUNCH
+            || animation == ANIM_KICK_LEG
+            || animation == ANIM_THROW_ANIM) {
+            return FirstPersonWeaponPose::Attack;
+        }
+    }
+
+    if (gmouse_3d_get_mode() == GAME_MOUSE_MODE_CROSSHAIR) {
+        return FirstPersonWeaponPose::Ready;
+    }
+
+    return FirstPersonWeaponPose::Lowered;
+}
+
 static bool gFirstPersonEnabled = false;
 static constexpr double kFirstPersonEyeHeight = 0.74;
 static int gFirstPersonWindow = -1;
@@ -2226,15 +2327,45 @@ void first_person_render()
         }
     }
 
-    // First-person weapon presentation. Reuse the equipped item's original
-    // inventory art from the local Fallout data files as an initial 2D/2.5D
-    // viewmodel layer. This deliberately keeps gameplay state native: changing
-    // hands or weapons changes the presented art automatically.
+    // First-person weapon presentation. Fallout decides which weapon is
+    // equipped and what the player is doing; this layer only decides how that
+    // native state should be framed in first person.
     {
         Object* heldItem = nullptr;
         if (intface_get_current_item(&heldItem) == 0
             && heldItem != nullptr
             && item_get_type(heldItem) == ITEM_TYPE_WEAPON) {
+            int hitMode = 0;
+            bool aiming = false;
+            if (intface_get_attack(&hitMode, &aiming) != 0) {
+                hitMode = -1;
+            }
+
+            const FirstPersonWeaponPose pose = first_person_weapon_pose(hitMode);
+            const int weaponAnimationCode = item_w_anim_code(heldItem);
+            const FirstPersonWeaponProfile profile =
+                first_person_weapon_profile(weaponAnimationCode);
+
+            double widthFraction = profile.loweredWidth;
+            double bottomFraction = profile.loweredBottom;
+            switch (pose) {
+            case FirstPersonWeaponPose::Ready:
+                widthFraction = profile.readyWidth;
+                bottomFraction = profile.readyBottom;
+                break;
+            case FirstPersonWeaponPose::Attack:
+                widthFraction = profile.attackWidth;
+                bottomFraction = profile.attackBottom;
+                break;
+            case FirstPersonWeaponPose::Reload:
+                widthFraction = profile.reloadWidth;
+                bottomFraction = profile.reloadBottom;
+                break;
+            case FirstPersonWeaponPose::Lowered:
+            default:
+                break;
+            }
+
             const int inventoryFid = item_inv_fid(heldItem);
             if (inventoryFid >= 0 && art_exists(inventoryFid)) {
                 CacheEntry* weaponArtKey = nullptr;
@@ -2265,17 +2396,8 @@ void first_person_render()
                         if (opaqueMaxX >= opaqueMinX && opaqueMaxY >= opaqueMinY) {
                             const int sourceWidth = opaqueMaxX - opaqueMinX + 1;
                             const int sourceHeight = opaqueMaxY - opaqueMinY + 1;
-                            const bool raised =
-                                gmouse_3d_get_mode() == GAME_MOUSE_MODE_CROSSHAIR;
-
-                            // Inventory art is not authored as a viewmodel, so
-                            // preserve its aspect ratio and give it a restrained
-                            // lower-right presentation for now. Attack mode
-                            // raises/scales it slightly as a simple ready pose.
-                            const double maxWidth =
-                                width * (raised ? 0.40 : 0.34);
-                            const double maxHeight =
-                                height * (raised ? 0.42 : 0.36);
+                            const double maxWidth = width * widthFraction;
+                            const double maxHeight = height * 0.56;
                             const double scale = std::min(
                                 maxWidth / sourceWidth,
                                 maxHeight / sourceHeight);
@@ -2286,13 +2408,14 @@ void first_person_render()
                                 1,
                                 static_cast<int>(std::lround(sourceHeight * scale)));
 
-                            const int centerX = width * 68 / 100;
+                            const int centerX = static_cast<int>(
+                                std::lround(width * profile.horizontalCenter));
                             const int left = std::clamp(
                                 centerX - drawWidth / 2,
                                 -drawWidth + 1,
                                 width - 1);
-                            const int bottom =
-                                height - (raised ? height / 18 : -height / 24);
+                            const int bottom = static_cast<int>(
+                                std::lround(height * bottomFraction));
                             const int top = bottom - drawHeight;
 
                             for (int dy = 0; dy < drawHeight; dy++) {
