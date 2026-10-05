@@ -573,3 +573,22 @@ same pre-attack failure condition used by Fallout's combat code (no ammo, out
 of range, not enough AP, blocked aim, dead target, or crippled-arm weapon
 restrictions). The underlying attack still goes through Fallout's normal combat
 functions; this is presentation only.
+
+
+## Native controller free-look foundation
+
+The first-person camera can now read the native SDL game-controller right-stick
+X axis independently of Fallout's mouse cursor. Camera heading is stored
+continuously rather than only as 15-degree slots, while keyboard/D-pad turn
+inputs still move in the existing 15-degree increments.
+
+At full right-stick deflection the camera turns at roughly 150 degrees/second,
+with an 18% dead zone. The right stick changes presentation only; native
+Fallout movement still resolves the camera heading to the nearest of the six
+hex directions.
+
+This is intentionally the first half of the Steam Deck control redesign. Steam
+Input should expose the right stick as a normal gamepad/joystick axis, while
+the right trackpad remains mouse input for Fallout's cursor and UI. Left-stick
+camera-relative hex movement is the next controller milestone after this
+free-look path is validated.
