@@ -264,9 +264,10 @@ For scenery prototypes of type `SCENERY_TYPE_DOOR`:
 - keep door tiles excluded from blocker-backed wall reconstruction
 - skip doors in the later generic scenery billboard pass to avoid double
   rendering
-- treat non-zero door animation frames as an open passage for this first
-  milestone; native Fallout collision, scripts and use behavior remain
-  authoritative
+- render frame-0 closed doors structurally, but keep non-zero animated/open
+  door frames visible through the live scenery pass instead of making the
+  door vanish entirely; native Fallout collision, scripts and use behavior
+  remain authoritative
 
 This is intentionally a minimal bridge to semantic scenery. The next validation
 target is that a closed door visually occupies its doorway, can still be clicked
