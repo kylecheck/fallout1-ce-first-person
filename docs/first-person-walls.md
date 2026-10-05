@@ -729,3 +729,10 @@ Weapon rendering is now split into two concerns: Fallout remains authoritative f
 Presentation profiles are keyed from Fallout's native weapon animation category (pistol, SMG, shotgun/rifle, minigun/launcher, and melee families). Each profile can independently tune width, horizontal framing, and vertical placement per pose. The current inventory FRM remains only a temporary visual source, but future first-person art or 2.5D reconstructions can plug into this layer without changing equipment/combat logic.
 
 Attack pose detection follows the player's native critter animation (melee, throw, point/fire/burst/continuous fire). Crosshair mode selects Ready; reload hit modes select Reload; normal exploration selects Lowered.
+
+
+## Cross-map combat targeting and large-room performance
+
+First-person attack mode now treats the center reticle as the authoritative combat pick point. Right-stick camera aim therefore drives the same critter selection used by the green target treatment, hit-chance HUD, hover feedback, and native `combat_attack_this` path. Normal interaction mode still uses the real mouse/trackpad pointer.
+
+Wall materials are now cached across first-person frames instead of being re-extracted and rectified from their source FRMs on every redraw. This removes a large amount of repeated CPU work in bigger maps such as the starting Vault, while leaving established wall geometry, topology reconstruction, and projection math unchanged.
