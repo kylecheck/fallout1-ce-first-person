@@ -273,3 +273,30 @@ This is intentionally a minimal bridge to semantic scenery. The next validation
 target is that a closed door visually occupies its doorway, can still be clicked
 through the normal Fallout action system, and disappears from the structural
 opening when native door animation advances away from frame 0.
+
+## VAULTBUR doorway snapshot and scenery cleanup
+
+The October 5 snapshot (`VAULTBUR.SAV`, elevation 0, player tile 14478)
+contains 611 wall objects and 121 scenery objects: 120 generic scenery and
+one ladder-up. There are **zero** `SCENERY_TYPE_DOOR` objects on this elevation.
+Consequently this room cannot validate the animated-door fallback. Its visible
+openings must be investigated as wall/generic-scenery construction, without
+inventing interactive door objects or sealing gaps from proximity alone.
+
+The generic scenery pass now skips `block.frm`, matching the existing wall
+collector's handling of invisible collision helpers. These helpers no longer
+produce billboard pixels, depth, or pick IDs; native collision remains intact.
+Critter sprites now use a constant scale of 80 source pixels per world unit,
+including live and death frames, instead of normalizing every rat and corpse to
+human height. This is an initial visual scale, pending in-game validation.
+
+An explicit `FALLOUT_FP_MAP_DUMP` also writes `<dump-path>.art.txt`. The companion
+contains unique wall/scenery frames within 18 hexes of the player, their FID,
+direction, frame number, dimensions, indexed pixels, and the 6-bit RGB palette.
+Index zero is transparent. Match these entries to the topology table by FID
+and direction. This allows identification of doorway art before defining frame
+geometry. The export runs once per launch with the existing map dump, not during
+normal gameplay. It contains local game artwork and is not a repository fixture.
+
+No wall lattice, blocker-span reconstruction, door state/use behavior, or native
+movement changes are included in this cleanup.

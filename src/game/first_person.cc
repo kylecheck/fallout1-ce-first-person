@@ -170,6 +170,69 @@ Object* first_person_object_at(int screenX, int screenY, int objectType, bool in
     return nullptr;
 }
 
+// The topology table cannot identify the shape of generic scenery. Export
+// nearby unique source frames alongside it, only during an explicit map dump.
+// Indexed pixels preserve transparency (index 0); palette components are 0..63.
+static void first_person_dump_nearby_art(const char* mapPath)
+{
+    char path[4096];
+    const int length = std::snprintf(path, sizeof(path), "%s.art.txt", mapPath);
+    if (length < 0 || length >= static_cast<int>(sizeof(path))) {
+        return;
+    }
+    FILE* output = std::fopen(path, "w");
+    if (output == nullptr) {
+        std::perror("First-person art dump");
+        return;
+    }
+    std::fprintf(output, "# palette_rgb6=");
+    for (unsigned char component : cmap) {
+        std::fprintf(output, "%02x", static_cast<unsigned int>(component));
+    }
+    std::fprintf(output, "\n# transparent_index=0\n");
+    std::fprintf(output, "type\tfid\tdirection\tframe\tart\twidth\theight\tpixels_hex\n");
+    struct FrameKey { int fid; int direction; int frame; };
+    std::vector<FrameKey> exported;
+    for (Object* object = obj_find_first_at(map_elevation);
+         object != nullptr; object = obj_find_next_at()) {
+        const int type = FID_TYPE(object->fid);
+        if ((type != OBJ_TYPE_WALL && type != OBJ_TYPE_SCENERY)
+            || object->tile < 0 || tile_dist(obj_dude->tile, object->tile) > 18) {
+            continue;
+        }
+        const int direction = ((object->rotation % ROTATION_COUNT) + ROTATION_COUNT) % ROTATION_COUNT;
+        if (std::any_of(exported.begin(), exported.end(), [&](const FrameKey& key) {
+                return key.fid == object->fid && key.direction == direction && key.frame == object->frame;
+            })) {
+            continue;
+        }
+        exported.push_back({ object->fid, direction, object->frame });
+        char name[64] = { 0 };
+        art_get_base_name(type, object->fid & 0xFFF, name);
+        CacheEntry* entry = nullptr;
+        Art* art = art_ptr_lock(object->fid, &entry);
+        if (art == nullptr) {
+            continue;
+        }
+        const int number = std::clamp(object->frame, 0, std::max(0, art_frame_max_frame(art) - 1));
+        ArtFrame* frame = frame_ptr(art, number, direction);
+        unsigned char* pixels = art_frame_data(art, number, direction);
+        if (frame != nullptr && pixels != nullptr && frame->width > 0 && frame->height > 0) {
+            std::fprintf(output, "%d\t%d\t%d\t%d\t%s\t%d\t%d\t",
+                type, object->fid, direction, number, name, frame->width, frame->height);
+            for (int i = 0; i < frame->width * frame->height; i++) {
+                std::fprintf(output, "%02x", static_cast<unsigned int>(pixels[i]));
+            }
+            std::fprintf(output, "\n");
+        }
+        art_ptr_unlock(entry);
+    }
+    const bool failed = std::ferror(output) != 0;
+    const int closeResult = std::fclose(output);
+    std::fprintf(stderr, "First-person art dump %s: %s\n",
+        failed || closeResult != 0 ? "failed" : "saved", path);
+}
+
 // Opt-in snapshot for inspecting actual map topology rather than inferring it
 // from a filmed viewport. Export once per process, on the first FP frame after
 // loading a save. Include hidden/invisible walls and scenery (including doors).
@@ -243,6 +306,7 @@ static void first_person_dump_map()
         std::fprintf(stderr, "First-person map dump failed: %s\n", path);
     } else {
         std::fprintf(stderr, "First-person map dump saved: %s\n", path);
+        first_person_dump_nearby_art(path);
     }
 }
 
@@ -1169,6 +1233,14 @@ void first_person_render()
         }
 
         if (type == OBJ_TYPE_SCENERY) {
+            // Native invisible collision helpers are not visible scenery. The
+            // wall collector already treats this art as topology-only; do the
+            // same here before it can write pixels, depth, or pick IDs.
+            char artName[64] = { 0 };
+            if (art_get_base_name(type, object->fid & 0xFFF, artName) == 0
+                && std::strcmp(artName, "block.frm") == 0) {
+                continue;
+            }
             Proto* sceneryProto = nullptr;
             if (PID_TYPE(object->pid) == OBJ_TYPE_SCENERY
                 && proto_ptr(object->pid, &sceneryProto) == 0
@@ -1223,7 +1295,10 @@ void first_person_render()
         double worldHeight;
         switch (object.type) {
         case OBJ_TYPE_CRITTER:
-            worldHeight = 1.35;
+            // Use one pixel scale for all live animation/death frames. A
+            // fixed projected height enlarged rats to human size and inflated
+            // short, wide corpse frames even further.
+            worldHeight = frame->height / 80.0;
             break;
         case OBJ_TYPE_ITEM:
             worldHeight = std::clamp(frame->height / 80.0, 0.18, 0.70);
