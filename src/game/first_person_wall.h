@@ -119,6 +119,34 @@ inline std::vector<FirstPersonWallSegment> first_person_wall_segments(int tile,
     return segments;
 }
 
+inline bool first_person_wall_is_corner(FirstPersonWallKind kind)
+{
+    return kind == FIRST_PERSON_WALL_NORTH_CORNER
+        || kind == FIRST_PERSON_WALL_SOUTH_CORNER
+        || kind == FIRST_PERSON_WALL_EAST_CORNER
+        || kind == FIRST_PERSON_WALL_WEST_CORNER;
+}
+
+// Return the tile delta of the straight wall that continues each corner arm.
+// This is structural topology only; it is also used to choose a clean material
+// for each first-person corner face instead of folding one isometric corner FRM
+// around both planes.
+inline int first_person_corner_neighbor_delta(FirstPersonWallKind kind, bool horizontal)
+{
+    switch (kind) {
+    case FIRST_PERSON_WALL_NORTH_CORNER:
+        return horizontal ? 1 : 200;
+    case FIRST_PERSON_WALL_SOUTH_CORNER:
+        return horizontal ? -1 : -200;
+    case FIRST_PERSON_WALL_EAST_CORNER:
+        return horizontal ? 1 : -200;
+    case FIRST_PERSON_WALL_WEST_CORNER:
+        return horizontal ? -1 : 200;
+    default:
+        return 0;
+    }
+}
+
 inline FirstPersonWallSegment first_person_overlap_wall_segment(
     FirstPersonWallSegment segment, double overlap)
 {
