@@ -317,8 +317,10 @@ static bool first_person_update_controller_look()
         return false;
     }
 
-    // Horizontal look remains roughly 150 degrees/sec at full deflection.
-    constexpr double kHeadingUnitsPerSecond = 10.0;
+    // Horizontal look should feel like a camera, not a repeated 15-degree
+    // turn command. Keep fine control near center, but allow a much faster
+    // room-scale sweep at full deflection.
+    constexpr double kHeadingUnitsPerSecond = 18.0;
     constexpr double kHeadingCount = ROTATION_COUNT * 4.0;
     gFirstPersonHeading = std::fmod(
         gFirstPersonHeading + yawAxis * kHeadingUnitsPerSecond * dt,
