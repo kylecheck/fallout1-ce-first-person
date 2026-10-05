@@ -260,8 +260,12 @@ void first_person_render()
             }
             hexX[corner] = width / 2 + static_cast<int>(cameraX * focal / cameraZ);
             hexY[corner] = horizon + static_cast<int>(focal * kEyeHeight / cameraZ);
-            if (hexX[corner] < -width || hexX[corner] > width * 2
-                || hexY[corner] < -height || hexY[corner] > height * 2) {
+            // Fallout's software draw_line routine does not clip endpoints.
+            // Never hand it an off-screen coordinate: doing so can write past
+            // the framebuffer and crash the game. For now, hide a partially
+            // off-screen target hex rather than trying to draw only part of it.
+            if (hexX[corner] < 0 || hexX[corner] >= width
+                || hexY[corner] < 0 || hexY[corner] >= height) {
                 hexVisible = false;
                 break;
             }
