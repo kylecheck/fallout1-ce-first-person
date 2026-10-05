@@ -217,25 +217,33 @@ semantic doorway cannot be permanently sealed by reconstructed wall geometry.
 Door open/closed presentation remains a scenery/rendering task.
 
 
-## Native translucent-egg compatibility
 
-Fallout's original object renderer has a special player-visibility mask, the
-translucent "egg". Wall/scenery pieces are tested against the player's side
-using their prototype `extendedFlags`, plus `OBJECT_WALL_TRANS_END`, before
-the egg mask is blended through the sprite.
+## Wall milestone status
 
-The first-person renderer now mirrors that native sidedness test only as
-material metadata. It does **not** render the top-down egg effect.
+The wall renderer is now considered structurally complete enough for the next
+first-person milestones.
 
-When a wall would be egg-sensitive in the native renderer:
+Validated in VAULTBUR:
 
-- keep its first-person structural geometry fully solid
-- determine the face axis from the actual first-person segment
-- search both directions on that axis for the nearest compatible straight wall
-- search may pass only through proven `block.frm` topology and stops at doors
-- borrow the compatible straight wall material when found
-- if no clean continuation exists, keep the wall's own already-rectified solid
-  material rather than deleting or alpha-cutting the structural face
+- straight wall runs hold their world-space shape while walking and turning
+- prototype-driven corner geometry produces enclosed rooms
+- blocker-backed reconstruction closes large missing spans that the isometric
+  renderer supplied indirectly
+- semantic door tiles are excluded from blocker bridges
+- wall tops use a consistent structural height
+- corner arms can borrow compatible straight-wall materials
+- depth testing and native movement remain stable
 
-This removes another class of top-down-only rendering assumptions without
-changing collision, movement, wall topology, or semantic openings.
+Known limitations intentionally deferred:
+
+- one isolated corner pattern can still fail to produce a convincing visible
+  face even though the surrounding geometry is correct
+- original Fallout wall FRMs are isometric sprites, so some first-person
+  textures remain visibly stretched or distorted
+- cosmetic seam/material work should be revisited after doors, scenery and
+  other world objects have a proper first-person representation
+
+A test of Fallout's native translucent "egg" sidedness did not fix the remaining
+corner case, so that experiment was removed rather than carrying extra
+player-relative material logic into later milestones. The original egg remains
+a top-down renderer behavior, not part of the first-person wall model.
