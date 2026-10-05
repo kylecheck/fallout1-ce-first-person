@@ -591,8 +591,8 @@ void first_person_render()
                     || wallKind == FIRST_PERSON_WALL_SOUTH_CORNER
                     || wallKind == FIRST_PERSON_WALL_EAST_CORNER
                     || wallKind == FIRST_PERSON_WALL_WEST_CORNER
-                ? 0.035
-                : 0.022;
+                ? 0.055
+                : 0.035;
             const FirstPersonWallSegment segment =
                 first_person_overlap_wall_segment(sourceSegment, joinOverlap);
 
@@ -675,8 +675,8 @@ void first_person_render()
                     // Only near a segment endpoint, borrow the nearest opaque
                     // texel from the same scanline. Interior transparency is
                     // preserved for authored holes/windows.
-                    if (!debugWalls && pixel == 0 && (s < 0.08 || s > 0.92)) {
-                        for (int radius = 1; radius <= 2 && pixel == 0; radius++) {
+                    if (!debugWalls && pixel == 0 && (s < 0.12 || s > 0.88)) {
+                        for (int radius = 1; radius <= 4 && pixel == 0; radius++) {
                             const int leftX = sourceX - radius;
                             const int rightX = sourceX + radius;
                             if (leftX >= opaqueMinX) {
