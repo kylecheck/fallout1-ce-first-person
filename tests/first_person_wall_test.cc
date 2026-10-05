@@ -1,6 +1,8 @@
 // Standalone regression tests; no Fallout data or SDL required.
 #include "game/first_person_wall.h"
+
 #include <cassert>
+#include <cmath>
 #include <iostream>
 
 using namespace fallout;
@@ -11,65 +13,81 @@ static void world(int tile, double* x, double* y)
     *y = tile / 200 - (tile % 200 & 1) * 0.5;
 }
 
-// Fixture for tile.cc's initialized 200-column native neighbor table.
-static int neighbor(int tile, int direction)
+static bool close(double a, double b)
 {
-    if (tile < 200 || tile >= 39800 || tile % 200 == 0 || tile % 200 == 199) {
-        return tile;
-    }
-    const int offsets[2][6] = { { -1, 199, 200, 201, 1, -200 },
-        { -201, -1, 200, 1, -199, -200 } };
-    return tile + offsets[tile % 200 & 1][direction];
+    return std::abs(a - b) < 1e-10;
 }
 
-static bool close(double a, double b) { return std::abs(a - b) < 1e-10; }
-
-static std::vector<FirstPersonWallSegment> segments(int tile,
-    const std::unordered_set<int>& tiles, int& count)
+static std::vector<FirstPersonWallSegment> segments(int tile, FirstPersonWallType type)
 {
-    double x, y;
+    double x;
+    double y;
     world(tile, &x, &y);
-    return first_person_wall_segments(tile, 0, x, y, tiles, neighbor, world, count);
+    return first_person_wall_segments(tile, type, x, y);
 }
 
 int main()
 {
-    // Both column parities and all six native directions: endpoints from
-    // adjacent objects must coincide exactly, regardless of camera position.
-    for (int tile : { 20100, 20101 }) {
-        for (int d = 0; d < 6; ++d) {
-            const int next = neighbor(tile, d);
-            assert(neighbor(next, (d + 3) % 6) == tile);
-            int count;
-            const std::unordered_set<int> tiles { tile, next };
-            const auto a = segments(tile, tiles, count);
-            assert(count == 1 && a.size() == 2);
-            const auto b = segments(next, tiles, count);
-            assert(close(a[0].bx, b[0].bx) && close(a[0].by, b[0].by));
-            assert(close(a[0].u1 + b[0].u1, 1.0));
-            assert(close(std::hypot(a[0].bx - a[1].bx, a[0].by - a[1].by), 1.0));
+    // Low action bits must not change the wall-light classification.
+    assert(first_person_wall_type(0x00000000u) == FirstPersonWallType::NorthSouth);
+    assert(first_person_wall_type(0x00002000u) == FirstPersonWallType::NorthSouth);
+    assert(first_person_wall_type(0x08000000u) == FirstPersonWallType::EastWest);
+    assert(first_person_wall_type(0x08002000u) == FirstPersonWallType::EastWest);
+    assert(first_person_wall_type(0x10000000u) == FirstPersonWallType::NorthCorner);
+    assert(first_person_wall_type(0x20000000u) == FirstPersonWallType::SouthCorner);
+    assert(first_person_wall_type(0x40000000u) == FirstPersonWallType::EastCorner);
+    assert(first_person_wall_type(0x80000000u) == FirstPersonWallType::WestCorner);
+
+    // North/south pieces follow the established world Y basis and meet exactly.
+    {
+        const int aTile = 20100;
+        const int bTile = 20300;
+        const auto a = segments(aTile, FirstPersonWallType::NorthSouth);
+        const auto b = segments(bTile, FirstPersonWallType::NorthSouth);
+        assert(a.size() == 1 && b.size() == 1);
+        assert(close(a[0].ax, a[0].bx));
+        assert(close(b[0].ax, b[0].bx));
+        assert(close(a[0].bx, b[0].ax));
+        assert(close(a[0].by, b[0].ay));
+    }
+
+    // Consecutive east/west wall objects live on alternating hex-center Y
+    // values. The parity correction must put both pieces on one straight line.
+    {
+        const int aTile = 20100;
+        const int bTile = 20101;
+        const auto a = segments(aTile, FirstPersonWallType::EastWest);
+        const auto b = segments(bTile, FirstPersonWallType::EastWest);
+        assert(a.size() == 1 && b.size() == 1);
+        assert(close(a[0].ay, a[0].by));
+        assert(close(b[0].ay, b[0].by));
+        assert(close(a[0].ay, b[0].ay));
+        assert(close(a[0].ax, b[0].bx));
+    }
+
+    // Corner classes emit exactly two perpendicular half-segments and preserve
+    // the direction pattern observed in the Vault wall-map snapshot.
+    {
+        const int tile = 20100;
+        const auto north = segments(tile, FirstPersonWallType::NorthCorner);
+        const auto south = segments(tile, FirstPersonWallType::SouthCorner);
+        const auto east = segments(tile, FirstPersonWallType::EastCorner);
+        const auto west = segments(tile, FirstPersonWallType::WestCorner);
+        for (const auto* result : { &north, &south, &east, &west }) {
+            assert(result->size() == 2);
+            const auto& h = (*result)[0];
+            const auto& v = (*result)[1];
+            assert(close(h.ay, h.by));
+            assert(close(v.ax, v.bx));
+            assert(close(h.ax, v.ax));
+            assert(close(h.ay, v.ay));
         }
+        assert(north[0].bx < north[0].ax && north[1].by > north[1].ay);
+        assert(south[0].bx > south[0].ax && south[1].by < south[1].ay);
+        assert(east[0].bx < east[0].ax && east[1].by < east[1].ay);
+        assert(west[0].bx > west[0].ax && west[1].by > west[1].ay);
     }
-    const int tile = 20100;
-    int count;
-    // Corners preserve both arms; straight chains and junctions retain every
-    // native neighbor, with no full-length plane through an unrelated axis.
-    for (auto directions : { std::vector<int>{0, 2}, {0, 3}, {0, 2, 4} }) {
-        std::unordered_set<int> tiles { tile };
-        for (int d : directions) tiles.insert(neighbor(tile, d));
-        const auto result = segments(tile, tiles, count);
-        assert(count == static_cast<int>(directions.size()));
-        assert(result.size() == directions.size());
-        for (const auto& segment : result) {
-            assert(close(std::hypot(segment.bx - segment.ax, segment.by - segment.ay), 0.5));
-        }
-    }
-    // Isolated and map-edge tiles must not connect to themselves.
-    for (int isolated : { tile, 0, 199, 39999 }) {
-        const auto result = segments(isolated, {isolated}, count);
-        assert(count == 0 && result.size() == 1);
-        assert(close(std::hypot(result[0].bx - result[0].ax, result[0].by - result[0].ay), 1.0));
-    }
+
     // A wall with its center behind the near plane can still have a visible
     // endpoint. Clipping must retain the correct fraction of the source art.
     double ax = 0, az = 0, bx = 2, bz = 2, u0 = 0, u1 = 1;
@@ -82,5 +100,6 @@ int main()
     assert(!first_person_clip_wall(ax, az, bx, bz, u0, u1, 0.5));
     az = bz = 0.5;
     assert(first_person_clip_wall(ax, az, bx, bz, u0, u1, 0.5));
-    std::cout << "Wall topology and near-plane regression tests passed\n";
+
+    std::cout << "Wall prototype geometry and near-plane regression tests passed\n";
 }
