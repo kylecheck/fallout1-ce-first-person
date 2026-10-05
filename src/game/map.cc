@@ -1600,9 +1600,10 @@ static void map_match_map_number()
 static void map_display_draw(Rect* rect)
 {
     if (first_person_is_enabled()) {
+        // The full-screen first-person window is now the visible presentation.
+        // Do not also redraw the hidden isometric display window underneath it;
+        // that doubles compositing work during camera motion.
         first_person_render();
-        Rect viewport = map_display_rect;
-        win_draw_rect(display_win, &viewport);
         return;
     }
 
