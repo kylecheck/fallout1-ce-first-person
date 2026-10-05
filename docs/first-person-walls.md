@@ -683,3 +683,10 @@ This removes redundant dirty-rect/compositing work from continuous camera
 motion and is intended to address the slideshow-like feel observed while
 turning. Native simulation and map refreshes still remain authoritative for
 world changes and movement.
+
+
+## Camera response and eye-height follow-up
+
+Vertical right-stick look now runs at roughly 180 degrees/second at full deflection, up from 90, so pitch responds more closely to the faster horizontal free-look feel. The pitch limits themselves are unchanged.
+
+First-person eye height was raised again from 0.68 to 0.74 world units, matching the previous +0.06 calibration step. The shared projection/targeting eye-height value remains unified so floor targeting stays aligned with the higher viewpoint.
