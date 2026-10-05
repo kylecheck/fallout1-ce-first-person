@@ -112,6 +112,34 @@ inline std::vector<FirstPersonWallSegment> first_person_wall_segments(int tile,
     return segments;
 }
 
+
+inline FirstPersonWallSegment first_person_overlap_wall_segment(
+    FirstPersonWallSegment segment, double overlap)
+{
+    const double dx = segment.bx - segment.ax;
+    const double dy = segment.by - segment.ay;
+    const double length = std::hypot(dx, dy);
+    if (length <= 0.0 || overlap <= 0.0) {
+        return segment;
+    }
+
+    const double scale = overlap / length;
+    const double du = segment.u1 - segment.u0;
+
+    // Push both structural endpoints slightly through their nominal joins.
+    // Extend UVs by the same fraction; the renderer clamps source lookup to the
+    // opaque FRM bounds, so the extra sliver repeats an edge texel instead of
+    // stretching the whole sprite. This hides raster/alpha cracks without
+    // changing the established wall lattice.
+    segment.ax -= dx * scale;
+    segment.ay -= dy * scale;
+    segment.bx += dx * scale;
+    segment.by += dy * scale;
+    segment.u0 -= du * scale;
+    segment.u1 += du * scale;
+    return segment;
+}
+
 inline bool first_person_clip_wall(double& ax, double& az, double& bx,
     double& bz, double& u0, double& u1, double nearPlane)
 {
