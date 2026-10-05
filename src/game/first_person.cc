@@ -188,6 +188,8 @@ int first_person_heading()
     return ((heading % kHeadingCount) + kHeadingCount) % kHeadingCount;
 }
 
+static bool first_person_update_controller_look();
+
 int first_person_rotation()
 {
     // Round the continuous presentation heading to the nearest native
@@ -200,7 +202,7 @@ int first_person_rotation()
 void first_person_turn(int steps)
 {
     if (!gFirstPersonEnabled) {
-        return false;
+        return;
     }
 
     constexpr double kHeadingCount = ROTATION_COUNT * 4.0;
@@ -212,7 +214,6 @@ void first_person_turn(int steps)
     gFirstPersonCameraRevision++;
     gFirstPersonPicks.clear();
     gFirstPersonInteractionPicks.clear();
-    return true;
 }
 
 void first_person_update()
@@ -247,7 +248,7 @@ static int first_person_horizon(int width, int height)
 static bool first_person_update_controller_look()
 {
     if (!gFirstPersonEnabled) {
-        return;
+        return false;
     }
 
     if ((SDL_WasInit(SDL_INIT_GAMECONTROLLER) & SDL_INIT_GAMECONTROLLER) == 0) {
@@ -340,6 +341,7 @@ static bool first_person_update_controller_look()
     gFirstPersonCameraRevision++;
     gFirstPersonPicks.clear();
     gFirstPersonInteractionPicks.clear();
+    return true;
 }
 
 // Input coordinates are desktop/window coordinates, whereas projection uses
