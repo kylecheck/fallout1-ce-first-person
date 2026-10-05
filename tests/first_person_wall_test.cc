@@ -71,28 +71,52 @@ int main()
         assert(endpoint_matches(a[0], b[0]));
     }
 
-    // Corner classes use the arm directions seen in the Vault 13 topology:
-    // N = right+down, S = left+up, E = right+up, W = left+down.
-    struct CornerCase {
-        unsigned int flags;
-        int horizontalNeighbor;
-        int verticalNeighbor;
-    };
-    const int tile = 20100;
-    for (const CornerCase& c : {
-             CornerCase { northCorner, tile + 1, tile + 200 },
-             CornerCase { southCorner, tile - 1, tile - 200 },
-             CornerCase { eastCorner, tile + 1, tile - 200 },
-             CornerCase { westCorner, tile - 1, tile + 200 },
-         }) {
-        const auto corner = segments(tile, c.flags);
-        const auto horizontal = segments(c.horizontalNeighbor, ew);
-        const auto vertical = segments(c.verticalNeighbor, ns);
+    // Real VAULTBUR samples from the topology dump. These assert that corners
+    // meet the actual straight-wall lattice, including the asymmetric vertical
+    // distance introduced by the East/West parity correction.
+    //
+    // 13078 North corner -> 13079 East/West run.
+    {
+        const auto corner = segments(13078, northCorner);
+        const auto horizontal = segments(13079, ew);
+        assert(corner.size() == 2 && horizontal.size() == 1);
+        assert(endpoint_matches(corner[0], horizontal[0]));
+        // The vertical arm ends exactly where a North/South wall on tile+200
+        // would begin, even though that particular map cell is a blocker.
+        const auto vertical = segments(13278, ns);
+        assert(endpoint_matches(corner[1], vertical[0]));
+    }
+
+    // 13878 South corner closes the run from 13877 and joins the real
+    // North/South wall at 13678.
+    {
+        const auto corner = segments(13878, southCorner);
+        const auto horizontal = segments(13877, ew);
+        const auto vertical = segments(13678, ns);
         assert(corner.size() == 2);
-        assert(endpoint_matches(corner[0], horizontal[0])
-            || endpoint_matches(corner[1], horizontal[0]));
-        assert(endpoint_matches(corner[0], vertical[0])
-            || endpoint_matches(corner[1], vertical[0]));
+        assert(endpoint_matches(corner[0], horizontal[0]));
+        assert(endpoint_matches(corner[1], vertical[0]));
+    }
+
+    // 13890 East corner turns from the 13891 East/West run toward 13690.
+    {
+        const auto corner = segments(13890, eastCorner);
+        const auto horizontal = segments(13891, ew);
+        const auto vertical = segments(13690, ns);
+        assert(corner.size() == 2);
+        assert(endpoint_matches(corner[0], horizontal[0]));
+        assert(endpoint_matches(corner[1], vertical[0]));
+    }
+
+    // West corners mirror the same lattice relationship.
+    {
+        const int tile = 13090;
+        const auto corner = segments(tile, westCorner);
+        const auto horizontal = segments(tile - 1, ew);
+        const auto vertical = segments(tile + 200, ns);
+        assert(corner.size() == 2);
+        assert(endpoint_matches(corner[0], horizontal[0]));
+        assert(endpoint_matches(corner[1], vertical[0]));
     }
 
     // Unknown/custom types retain deterministic fallback geometry.
