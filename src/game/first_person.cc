@@ -224,11 +224,12 @@ void first_person_update()
     }
 
     if (first_person_update_controller_look()) {
-        // Controller look must drive repaint itself. Polling only from the
-        // render path creates a deadlock after certain mouse/combat mode
-        // changes: no repaint means no controller poll, so the camera appears
-        // frozen until some unrelated world update occurs.
-        tile_refresh_display();
+        // First-person owns a full-screen presentation window now. Redraw that
+        // window directly for camera motion instead of routing every stick
+        // sample through Fallout's isometric map refresh/dirty-rect machinery.
+        // The old path did extra work underneath the overlay and made free look
+        // feel noticeably more stuttery than the 60 Hz gameplay loop.
+        first_person_render();
     }
 }
 
