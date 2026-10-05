@@ -331,3 +331,31 @@ remain deferred. Unknown gaps remain open rather than receiving guessed frames.
 Regression coverage: `tests/first_person_doorway_test.cc` checks both verified
 pairs and rejects wrong art, orientation, spacing, map bounds, and row wrapping.
 The existing wall-lattice regression suite remains unchanged.
+
+## Fixed generic vault doorway scenery
+
+The room snapshot at player tile 15295 identifies the complete doorway frame as
+`v13secr6.frm`: generic scenery object 532 at tile 16696, with extended flags
+`0x08002000`. It is not a native animated door. Its surrounding east/west wall
+run ends at 16693 and resumes at 16699, leaving five lattice columns for the
+complete frame. The local blocker cells are retained as native collision data.
+
+This specific artwork now renders on a fixed east/west structural plane with
+the existing parity correction, a five-column width, and wall height 1.65.
+Its live frame is copied and vertically sheared by column to straighten the
+verified 151x142 sprite's rising top edge (36 source pixels of rise). The
+112-pixel face height is scaled with live frame dimensions. Unlike solid wall
+material rectification, this transform retains index-zero transparency in the
+passage. Source pixels outside the live FRM stay transparent.
+
+The generic billboard pass skips this asset to prevent duplicate rendering.
+The plane uses the shared clipping/depth path and writes the actual scenery
+object into the pick buffer only at visible pixels. Native scripts, use logic,
+and collision remain authoritative. Its baseline is projected on the ground
+plane, avoiding the billboard pass's screen-edge baseline clamp. Other generic
+scenery continues to use the existing renderer.
+
+This is an asset-specific first structural scenery profile. The world placement
+and material orientation require Deck validation; it is still a flat frame
+without jamb thickness or a modeled back face. Elevator artwork and unrelated
+openings are not classified from this asset.

@@ -69,6 +69,7 @@ struct FirstPersonDoorSprite {
     unsigned int extendedFlags;
     double worldX;
     double worldY;
+    bool portal = false;
 };
 
 struct FirstPersonObjectSprite {
@@ -641,6 +642,21 @@ void first_person_render()
             continue;
         }
 
+        char sceneryArt[64] = { 0 };
+        art_get_base_name(OBJ_TYPE_SCENERY, object->fid & 0xFFF, sceneryArt);
+        if (std::strcmp(sceneryArt, "v13secr6.frm") == 0
+            && (object->flags & OBJECT_HIDDEN) == 0
+            && tile_dist(obj_dude->tile, object->tile) <= 18) {
+            double worldX;
+            double worldY;
+            tileToWorld(object->tile, &worldX, &worldY);
+            // This verified generic frame spans five wall-lattice columns.
+            // It is scenery, not an animated native door or collision object.
+            doors.push_back({ object, object->fid, object->frame,
+                ((object->rotation % ROTATION_COUNT) + ROTATION_COUNT) % ROTATION_COUNT,
+                object->tile, 0x08000000u, worldX, worldY, true });
+        }
+
         Proto* proto = nullptr;
         if (PID_TYPE(object->pid) == OBJ_TYPE_SCENERY
             && proto_ptr(object->pid, &proto) == 0
@@ -1139,12 +1155,46 @@ void first_person_render()
     // Native collision/use logic remains authoritative.
     constexpr double kDoorHeight = 1.55;
     for (const FirstPersonDoorSprite& door : doors) {
-        if (door.frame != 0) {
+        if (!door.portal && door.frame != 0) {
             continue;
         }
 
-        FirstPersonWallMaterial* material =
-            getWallMaterial(door.fid, door.direction);
+        FirstPersonWallMaterial portalMaterial {};
+        FirstPersonWallMaterial* material = nullptr;
+        if (door.portal) {
+            CacheEntry* entry = nullptr;
+            Art* art = art_ptr_lock(door.fid, &entry);
+            if (art == nullptr) {
+                continue;
+            }
+            const int number = std::clamp(door.frame, 0, std::max(0, art_frame_max_frame(art) - 1));
+            ArtFrame* frame = frame_ptr(art, number, door.direction);
+            unsigned char* source = art_frame_data(art, number, door.direction);
+            if (frame != nullptr && source != nullptr && frame->width > 0 && frame->height > 0) {
+                portalMaterial.width = frame->width;
+                portalMaterial.height = std::max(1, frame->height * 112 / 142);
+                portalMaterial.pixels.resize(static_cast<size_t>(portalMaterial.width)
+                    * portalMaterial.height, 0);
+                // The verified 151x142 FRM has a top rising from y=36 to y=0.
+                // Undo that column shear without filling the transparent hole.
+                // Scale the profile with the live frame dimensions.
+                for (int x = 0; x < portalMaterial.width; x++) {
+                    const double u = x / static_cast<double>(std::max(1, portalMaterial.width - 1));
+                    const double top = frame->height * (36.0 / 142.0) * (1.0 - u);
+                    for (int y = 0; y < portalMaterial.height; y++) {
+                        const int sy = static_cast<int>(std::lround(top + y));
+                        if (sy >= 0 && sy < frame->height) {
+                            portalMaterial.pixels[y * portalMaterial.width + x] =
+                                source[sy * frame->width + x];
+                        }
+                    }
+                }
+                material = &portalMaterial;
+            }
+            art_ptr_unlock(entry);
+        } else {
+            material = getWallMaterial(door.fid, door.direction);
+        }
         if (material == nullptr || material->width <= 0 || material->height <= 0) {
             continue;
         }
@@ -1155,6 +1205,17 @@ void first_person_render()
             door.direction,
             door.worldX,
             door.worldY);
+
+        if (door.portal) {
+            // Preserve the existing parity-corrected wall line. Enlarge only
+            // this scenery plane to the verified five-column footprint.
+            for (FirstPersonWallSegment& segment : doorSegments) {
+                const double centerX = (segment.ax + segment.bx) * 0.5;
+                segment.ax = centerX + (segment.ax - centerX) * 5.0;
+                segment.bx = centerX + (segment.bx - centerX) * 5.0;
+            }
+        }
+        const double planeHeight = door.portal ? kStructuralWallHeight : kDoorHeight;
 
         for (FirstPersonWallSegment sourceSegment : doorSegments) {
             sourceSegment.u0 = 0.0;
@@ -1181,8 +1242,8 @@ void first_person_render()
             const int screenBX = width / 2 + static_cast<int>(bx * focal / bz);
             const int bottomAY = horizon + static_cast<int>(focal * kEyeHeight / az);
             const int bottomBY = horizon + static_cast<int>(focal * kEyeHeight / bz);
-            const int topAY = bottomAY - static_cast<int>(focal * kDoorHeight / az);
-            const int topBY = bottomBY - static_cast<int>(focal * kDoorHeight / bz);
+            const int topAY = bottomAY - static_cast<int>(focal * planeHeight / az);
+            const int topBY = bottomBY - static_cast<int>(focal * planeHeight / bz);
 
             const int minX = std::max(0, std::min(screenAX, screenBX));
             const int maxX = std::min(width - 1, std::max(screenAX, screenBX));
@@ -1280,7 +1341,8 @@ void first_person_render()
             // same here before it can write pixels, depth, or pick IDs.
             char artName[64] = { 0 };
             if (art_get_base_name(type, object->fid & 0xFFF, artName) == 0
-                && std::strcmp(artName, "block.frm") == 0) {
+                && (std::strcmp(artName, "block.frm") == 0
+                    || std::strcmp(artName, "v13secr6.frm") == 0)) {
                 continue;
             }
             Proto* sceneryProto = nullptr;
