@@ -706,3 +706,10 @@ A 32% movement dead zone and a short 120 ms repeat gate prevent idle drift and c
 The first-person overlay now carries a minimal persistent native-state HUD: current/max HP at the lower left, and ammo at the lower right with AP added while combat is active. These values are read from Fallout's existing critter, stat, interface, and weapon state rather than introducing replacement gameplay state.
 
 A controller activity guard also prevents legacy left/right arrow events from rotating the camera while the native left stick is actively supplying movement. This handles Steam Input layouts that still leak the older arrow binding alongside the SDL joystick axis, eliminating the small yaw bump seen immediately before lateral hex movement while preserving D-pad camera turns when the left stick is centered.
+
+
+## First-person combat target treatment
+
+Attack/crosshair mode now gives the hovered critter a Fallout-green first-person targeting treatment using the existing depth-tested pick buffer. A checker-pattern overlay recolors only the critter's actually visible pixels, so foreground walls and scenery still occlude the target correctly while enough original sprite art remains visible underneath.
+
+The target brackets also switch to the same green treatment in attack mode, and a compact native-font label appears above the target with its name plus current native hit chance. If Fallout rejects the shot, the label mirrors the native reason instead (for example NO AMMO, OUT OF RANGE, NO AP, DEAD, or BLOCKED). Native combat remains fully authoritative; this is presentation only.
