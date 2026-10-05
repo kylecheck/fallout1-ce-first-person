@@ -38,6 +38,7 @@ static bool gFirstPersonEnabled = false;
 // Native Fallout movement still resolves to the nearest one of its 6 hex
 // directions.
 static double gFirstPersonHeading = 0.0;
+static double gFirstPersonPitchDegrees = 0.0;
 static int gFirstPersonCameraRevision = 0;
 static SDL_GameController* gFirstPersonController = nullptr;
 static Uint64 gFirstPersonControllerTicks = 0;
@@ -127,6 +128,7 @@ void first_person_toggle()
         const int nativeRotation = ((obj_dude->rotation % ROTATION_COUNT)
             + ROTATION_COUNT) % ROTATION_COUNT;
         gFirstPersonHeading = nativeRotation * 4.0;
+        gFirstPersonPitchDegrees = 0.0;
         gFirstPersonCameraRevision++;
     }
     gFirstPersonPicks.clear();
@@ -166,6 +168,20 @@ void first_person_turn(int steps)
     gFirstPersonCameraRevision++;
     gFirstPersonPicks.clear();
     gFirstPersonInteractionPicks.clear();
+}
+
+static int first_person_horizon(int width, int height)
+{
+    constexpr double kPi = 3.14159265358979323846;
+    const double focal = width * 0.70;
+    const double pitchRadians = gFirstPersonPitchDegrees * kPi / 180.0;
+    const int baseHorizon = height * 43 / 100;
+    const int shifted = baseHorizon
+        + static_cast<int>(std::lround(focal * std::tan(pitchRadians)));
+
+    // Keep enough framebuffer above and below the horizon for the software
+    // floor/wall projection even at the pitch limits.
+    return std::clamp(shifted, height / 12, height * 11 / 12);
 }
 
 static void first_person_update_controller_look()
@@ -212,33 +228,53 @@ static void first_person_update_controller_look()
         return;
     }
 
-    const Sint16 rawAxis = SDL_GameControllerGetAxis(
+    auto normalizeAxis = [](Sint16 raw) {
+        return raw >= 0 ? raw / 32767.0 : raw / 32768.0;
+    };
+
+    double yawAxis = normalizeAxis(SDL_GameControllerGetAxis(
         gFirstPersonController,
-        SDL_CONTROLLER_AXIS_RIGHTX);
-    double axis = rawAxis >= 0
-        ? rawAxis / 32767.0
-        : rawAxis / 32768.0;
+        SDL_CONTROLLER_AXIS_RIGHTX));
+    double pitchAxis = normalizeAxis(SDL_GameControllerGetAxis(
+        gFirstPersonController,
+        SDL_CONTROLLER_AXIS_RIGHTY));
 
     constexpr double kDeadZone = 0.18;
-    if (std::abs(axis) <= kDeadZone) {
+    auto applyDeadZone = [](double axis) {
+        constexpr double deadZone = 0.18;
+        if (std::abs(axis) <= deadZone) {
+            return 0.0;
+        }
+        return std::copysign(
+            (std::abs(axis) - deadZone) / (1.0 - deadZone),
+            axis);
+    };
+
+    yawAxis = applyDeadZone(yawAxis);
+    pitchAxis = applyDeadZone(pitchAxis);
+    if (yawAxis == 0.0 && pitchAxis == 0.0) {
         return;
     }
 
-    // Remove the dead-zone discontinuity while preserving full stick travel.
-    axis = std::copysign(
-        (std::abs(axis) - kDeadZone) / (1.0 - kDeadZone),
-        axis);
-
-    // Heading units are 15 degrees. About 150 degrees/sec at full deflection
-    // gives useful room scanning without making fine aim excessively twitchy.
+    // Horizontal look remains roughly 150 degrees/sec at full deflection.
     constexpr double kHeadingUnitsPerSecond = 10.0;
     constexpr double kHeadingCount = ROTATION_COUNT * 4.0;
     gFirstPersonHeading = std::fmod(
-        gFirstPersonHeading + axis * kHeadingUnitsPerSecond * dt,
+        gFirstPersonHeading + yawAxis * kHeadingUnitsPerSecond * dt,
         kHeadingCount);
     if (gFirstPersonHeading < 0.0) {
         gFirstPersonHeading += kHeadingCount;
     }
+
+    // SDL's right-stick Y axis is negative when pushed up. Treat that as
+    // positive camera pitch. Pitch deliberately stays modest because Fallout's
+    // maps have no true ceiling/floor geometry above and below the play plane.
+    constexpr double kPitchDegreesPerSecond = 90.0;
+    constexpr double kPitchLimitDegrees = 18.0;
+    gFirstPersonPitchDegrees = std::clamp(
+        gFirstPersonPitchDegrees - pitchAxis * kPitchDegreesPerSecond * dt,
+        -kPitchLimitDegrees,
+        kPitchLimitDegrees);
 
     gFirstPersonCameraRevision++;
     gFirstPersonPicks.clear();
@@ -260,8 +296,11 @@ int first_person_target_tile(int screenX, int screenY)
     const int height = win_height(display_win);
     const int x = screenX - rect.ulx;
     const int y = screenY - rect.uly;
-    const int horizon = height * 43 / 100;
-    if (width <= 0 || height <= 0 || x < 0 || x >= width || y <= horizon || y >= height) {
+    if (width <= 0 || height <= 0) {
+        return -1;
+    }
+    const int horizon = first_person_horizon(width, height);
+    if (x < 0 || x >= width || y <= horizon || y >= height) {
         return -1;
     }
     const double focal = width * 0.70;
@@ -573,7 +612,7 @@ void first_person_render()
     const int gridColor = colorTable[992];
     const int crosshairColor = colorTable[31744];
 
-    const int horizon = height * 43 / 100;
+    const int horizon = first_person_horizon(width, height);
     buf_fill(buffer, width, horizon, width, sky);
     buf_fill(buffer + horizon * width, width, height - horizon, width, ground);
 
