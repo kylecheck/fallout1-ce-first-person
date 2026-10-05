@@ -663,3 +663,9 @@ camera does not desynchronize the cursor from the rendered ground.
 
 This is an initial calibration pass rather than a final physical scale. Vault
 window sightlines are the preferred visual reference for the next adjustment.
+
+
+Eye-height calibration was nudged again from 0.62 to 0.68 world units after
+runtime testing against Vault window sightlines. This keeps the camera clearly
+above the earlier crouched-looking perspective without materially changing the
+established world scale.
