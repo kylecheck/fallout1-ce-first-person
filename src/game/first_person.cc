@@ -34,6 +34,7 @@
 namespace fallout {
 
 static bool gFirstPersonEnabled = false;
+static constexpr double kFirstPersonEyeHeight = 0.62;
 static int gFirstPersonWindow = -1;
 static bool gFirstPersonRestoreInterface = false;
 // Camera heading is measured in 15-degree units, but stored continuously so
@@ -370,7 +371,7 @@ int first_person_target_tile(int screenX, int screenY)
         return -1;
     }
     const double focal = width * 0.70;
-    const double z = focal * 0.50 / (y - horizon);
+    const double z = focal * kFirstPersonEyeHeight / (y - horizon);
     if (z < 0.45 || z > 36.0) {
         return -1;
     }
@@ -751,7 +752,7 @@ void first_person_render()
         return &floorArts.back();
     };
 
-    constexpr double kEyeHeight = 0.50;
+    constexpr double kEyeHeight = kFirstPersonEyeHeight;
     constexpr double kIsoXFromWorldX = 27.712812921102035;
     constexpr double kIsoYFromWorldX = -6.928203230275509;
 
