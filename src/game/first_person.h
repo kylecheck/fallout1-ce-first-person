@@ -10,6 +10,9 @@ struct Object;
 bool first_person_is_enabled();
 void first_person_toggle();
 void first_person_render();
+// Camera heading is independent of native character facing during pathing.
+int first_person_rotation();
+void first_person_turn(int steps);
 int first_person_target_tile(int screenX, int screenY);
 Object* first_person_object_at(int screenX, int screenY, int objectType, bool includeDude, int elevation);
 

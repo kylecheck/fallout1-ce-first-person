@@ -889,20 +889,14 @@ int game_handle_input(int eventCode, bool isInCombatMode)
         break;
     case KEY_ARROW_LEFT:
         if (first_person_is_enabled()) {
-            if (register_begin(ANIMATION_REQUEST_RESERVED) == 0) {
-                register_object_dec_rotation(obj_dude);
-                register_end();
-            }
+            first_person_turn(-1);
         } else {
             map_scroll(-1, 0);
         }
         break;
     case KEY_ARROW_RIGHT:
         if (first_person_is_enabled()) {
-            if (register_begin(ANIMATION_REQUEST_RESERVED) == 0) {
-                register_object_inc_rotation(obj_dude);
-                register_end();
-            }
+            first_person_turn(1);
         } else {
             map_scroll(1, 0);
         }
@@ -910,8 +904,8 @@ int game_handle_input(int eventCode, bool isInCombatMode)
     case KEY_ARROW_UP:
         if (first_person_is_enabled()) {
             // Keep Fallout's native pathing/collision/animation machinery:
-            // request a one-hex walk in the direction the player is facing.
-            const int destination = tile_num_in_direction(obj_dude->tile, obj_dude->rotation, 1);
+            // request a one-hex walk in the camera heading.
+            const int destination = tile_num_in_direction(obj_dude->tile, first_person_rotation(), 1);
             if (destination >= 0 && register_begin(ANIMATION_REQUEST_RESERVED) == 0) {
                 register_object_move_to_tile(obj_dude, destination, obj_dude->elevation, -1, 0);
                 register_end();
@@ -923,7 +917,7 @@ int game_handle_input(int eventCode, bool isInCombatMode)
     case KEY_ARROW_DOWN:
         if (first_person_is_enabled()) {
             // Backpedal one hex without changing the viewing direction.
-            const int reverseRotation = (obj_dude->rotation + ROTATION_COUNT / 2) % ROTATION_COUNT;
+            const int reverseRotation = (first_person_rotation() + ROTATION_COUNT / 2) % ROTATION_COUNT;
             const int destination = tile_num_in_direction(obj_dude->tile, reverseRotation, 1);
             if (destination >= 0 && register_begin(ANIMATION_REQUEST_RESERVED) == 0) {
                 register_object_move_to_tile(obj_dude, destination, obj_dude->elevation, -1, 0);

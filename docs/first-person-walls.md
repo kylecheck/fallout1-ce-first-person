@@ -476,3 +476,37 @@ doorway and material regressions. Deck testing should check distant room walls
 and whether remaining corner faults persist once the supporting walls are in
 range. Longer range may increase frame cost; no on-Deck performance result is
 claimed before that test.
+
+
+### Walls MVP checkpoint and independent camera heading
+
+Deck testing confirmed the longer render range. Walls are an MVP checkpoint
+for the current tested rooms, with isolated corners and asset-specific polish
+still deferred. No claim is made that every map has been validated.
+
+The camera previously read `obj_dude->rotation` every frame. Native hex
+pathfinding rotates the character to face each path segment, making click-to-
+walk steer the camera and making backpedal reverse the next forward input.
+First-person heading is now presentation-owned. Enabling first person seeds
+it from native facing; left/right turns change it in the existing 60-degree
+increments. Character facing can change freely without changing the view.
+Up/down request native one-hex movement along/opposite the camera heading.
+Click-to-walk still uses native destination, pathing, collision and animation.
+Floor picking, scene projection and pick-buffer validity use the same heading;
+a deliberate camera turn invalidates old picks.
+
+This pass removes automatic yaw changes. Position still follows native tile
+centers, so lateral hex stepping/position snapping may remain. Smooth position
+interpolation and continuous mouse look are separate future presentation work.
+
+Validation: strict first-person C++17 syntax compilation and an actual camera
+function harness covering native facing changes, turn wrap, disabled turns and
+mode reentry. Run the harness without SDL/game data using:
+
+```sh
+g++ -std=c++17 -Wall -Wextra -Werror -ffunction-sections -fdata-sections -Isrc tests/first_person_camera_test.cc src/game/first_person.cc -Wl,--gc-sections -o /tmp/fp-camera-test
+/tmp/fp-camera-test
+```
+
+Full `game.cc` compilation locally requires unavailable SDL headers; the Deck
+SDK build and movement/targeting playtest are the integration checks.

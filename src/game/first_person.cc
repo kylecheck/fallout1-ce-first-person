@@ -25,6 +25,7 @@
 namespace fallout {
 
 static bool gFirstPersonEnabled = false;
+static int gFirstPersonRotation = 0;
 
 // Pick IDs are written only when a visible scene pixel wins the depth test.
 // Resolve against live map objects before returning; never dereference cached
@@ -102,6 +103,27 @@ bool first_person_is_enabled()
 void first_person_toggle()
 {
     gFirstPersonEnabled = !gFirstPersonEnabled;
+    if (gFirstPersonEnabled && obj_dude != nullptr) {
+        gFirstPersonRotation = ((obj_dude->rotation % ROTATION_COUNT)
+            + ROTATION_COUNT) % ROTATION_COUNT;
+    }
+    gFirstPersonPicks.clear();
+}
+
+// The view heading belongs to presentation, not native animation/pathing.
+// Native movement remains free to rotate the character at every hex step.
+int first_person_rotation()
+{
+    return gFirstPersonRotation;
+}
+
+void first_person_turn(int steps)
+{
+    if (!gFirstPersonEnabled) {
+        return;
+    }
+    gFirstPersonRotation = ((gFirstPersonRotation + steps % ROTATION_COUNT)
+        % ROTATION_COUNT + ROTATION_COUNT) % ROTATION_COUNT;
     gFirstPersonPicks.clear();
 }
 
@@ -131,7 +153,7 @@ int first_person_target_tile(int screenX, int screenY)
     }
     const double cameraX = (x - width * 0.5) * z / focal;
     constexpr double pi = 3.14159265358979323846;
-    const int rotation = ((obj_dude->rotation % ROTATION_COUNT) + ROTATION_COUNT) % ROTATION_COUNT;
+    const int rotation = first_person_rotation();
     const double yaw = -pi / 6.0 + rotation * pi / 3.0;
     const double dx = -std::sin(yaw) * cameraX + std::cos(yaw) * z;
     const double dy = std::cos(yaw) * cameraX + std::sin(yaw) * z;
@@ -149,7 +171,7 @@ Object* first_person_object_at(int screenX, int screenY, int objectType, bool in
 {
     if (!gFirstPersonEnabled || obj_dude == nullptr || display_win == -1
         || elevation != map_elevation || elevation != gPickElevation
-        || obj_dude->tile != gPickTile || obj_dude->rotation != gPickRotation
+        || obj_dude->tile != gPickTile || first_person_rotation() != gPickRotation
         || gPickWidth != win_width(display_win) || gPickHeight != win_height(display_win)
         || gFirstPersonPicks.empty()) {
         return nullptr;
@@ -340,7 +362,7 @@ void first_person_render()
     gPickWidth = width;
     gPickHeight = height;
     gPickTile = obj_dude->tile;
-    gPickRotation = obj_dude->rotation;
+    gPickRotation = first_person_rotation();
     gPickElevation = map_elevation;
     gFirstPersonPicks.assign(static_cast<size_t>(width) * height, { nullptr, -1 });
 
@@ -374,7 +396,7 @@ void first_person_render()
     double playerWorldY;
     tileToWorld(obj_dude->tile, &playerWorldX, &playerWorldY);
 
-    const int rotation = ((obj_dude->rotation % ROTATION_COUNT) + ROTATION_COUNT) % ROTATION_COUNT;
+    const int rotation = first_person_rotation();
     const double yaw = -kPi / 6.0 + rotation * (kPi / 3.0);
     const double forwardX = std::cos(yaw);
     const double forwardY = std::sin(yaw);
