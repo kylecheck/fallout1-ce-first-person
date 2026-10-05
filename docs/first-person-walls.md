@@ -247,3 +247,28 @@ A test of Fallout's native translucent "egg" sidedness did not fix the remaining
 corner case, so that experiment was removed rather than carrying extra
 player-relative material logic into later milestones. The original egg remains
 a top-down renderer behavior, not part of the first-person wall model.
+
+
+## Door/scenery milestone
+
+Doors now begin moving out of the generic billboard renderer and into structural
+first-person geometry.
+
+For scenery prototypes of type `SCENERY_TYPE_DOOR`:
+
+- collect their live tile, rotation, frame and prototype `extendedFlags`
+- place closed doors on the same structural lattice used by walls
+- render them as depth-tested vertical planes instead of camera-facing sprites
+- write the real door object into the first-person pick buffer, so existing
+  Fallout mouse/use logic can target the door directly
+- keep door tiles excluded from blocker-backed wall reconstruction
+- skip doors in the later generic scenery billboard pass to avoid double
+  rendering
+- treat non-zero door animation frames as an open passage for this first
+  milestone; native Fallout collision, scripts and use behavior remain
+  authoritative
+
+This is intentionally a minimal bridge to semantic scenery. The next validation
+target is that a closed door visually occupies its doorway, can still be clicked
+through the normal Fallout action system, and disappears from the structural
+opening when native door animation advances away from frame 0.
