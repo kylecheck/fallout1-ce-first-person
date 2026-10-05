@@ -28,6 +28,7 @@
 #include "plib/gnw/gnw.h"
 #include "plib/gnw/grbuf.h"
 #include "plib/gnw/mouse.h"
+#include "plib/gnw/svga.h"
 #include "plib/gnw/text.h"
 
 namespace fallout {
