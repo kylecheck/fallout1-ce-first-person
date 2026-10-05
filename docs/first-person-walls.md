@@ -510,3 +510,29 @@ g++ -std=c++17 -Wall -Wextra -Werror -ffunction-sections -fdata-sections -Isrc t
 
 Full `game.cc` compilation locally requires unavailable SDL headers; the Deck
 SDK build and movement/targeting playtest are the integration checks.
+
+
+## Scene-agnostic interaction/combat foundation
+
+First-person object picking now has a small screen-space assist radius after an
+exact visible-pixel miss. Fallout's original FRMs are sparse isometric
+silhouettes, which made small switches, items and distant critters too difficult
+to select when treated as literal one-pixel targets in perspective.
+
+The assist is intentionally generic:
+
+- exact rendered pixels remain authoritative
+- only a small nearby pick-buffer neighborhood is searched after an exact miss
+- generic snapping ignores walls so a nearby wall cannot steal a click from a
+  small scenery/item/critter target
+- explicit wall queries still work
+- the returned object is still the real live Fallout `Object`
+- scenery use continues through native use/script logic
+- combat targeting continues through native critter selection,
+  `combat_attack_this`, weapon/AP/range checks and combat state
+
+This is the foundation for testing doors, containers, ladders, elevators,
+switches and enemies across maps without introducing location-specific
+interaction code. Visual presentation can still be specialized later by
+semantic scenery class, but gameplay authority stays in Fallout's existing
+systems.
