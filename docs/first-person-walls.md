@@ -699,3 +699,10 @@ The SDL left stick now supplies camera-relative movement intent directly to the 
 Movement still uses Fallout's native animation/pathing/collision request path (`register_object_move_to_tile`), so the stick does not move the player through arbitrary analog world coordinates. Forward, backward, and lateral/diagonal stick directions therefore become native neighboring-hex requests while preserving engine authority.
 
 A 32% movement dead zone and a short 120 ms repeat gate prevent idle drift and command spam. Steam Input should expose the left stick as a normal joystick/gamepad stick for this path; keyboard/D-pad emulation on the left stick should be disabled to avoid duplicate movement/turn commands.
+
+
+## First-person HUD and duplicate-stick guard
+
+The first-person overlay now carries a minimal persistent native-state HUD: current/max HP at the lower left, and ammo at the lower right with AP added while combat is active. These values are read from Fallout's existing critter, stat, interface, and weapon state rather than introducing replacement gameplay state.
+
+A controller activity guard also prevents legacy left/right arrow events from rotating the camera while the native left stick is actively supplying movement. This handles Steam Input layouts that still leak the older arrow binding alongside the SDL joystick axis, eliminating the small yaw bump seen immediately before lateral hex movement while preserving D-pad camera turns when the left stick is centered.
