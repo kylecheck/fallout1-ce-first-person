@@ -57,6 +57,17 @@ struct FirstPersonWallMaterial {
     std::vector<unsigned char> pixels;
 };
 
+struct FirstPersonDoorSprite {
+    Object* object;
+    int fid;
+    int frame;
+    int direction;
+    int tile;
+    unsigned int extendedFlags;
+    double worldX;
+    double worldY;
+};
+
 struct FirstPersonObjectSprite {
     Object* object;
     int fid;
@@ -554,6 +565,7 @@ void first_person_render()
     // blocker bridge through a tile occupied by a door; closed/open state will
     // be handled by the scenery renderer instead of being baked into walls.
     std::vector<int> doorTiles;
+    std::vector<FirstPersonDoorSprite> doors;
     for (Object* object = obj_find_first_at(map_elevation);
          object != nullptr;
          object = obj_find_next_at()) {
@@ -568,6 +580,23 @@ void first_person_render()
             && proto != nullptr
             && proto->scenery.type == SCENERY_TYPE_DOOR) {
             doorTiles.push_back(object->tile);
+
+            if ((object->flags & OBJECT_HIDDEN) == 0
+                && tile_dist(obj_dude->tile, object->tile) <= 18) {
+                double doorWorldX;
+                double doorWorldY;
+                tileToWorld(object->tile, &doorWorldX, &doorWorldY);
+                doors.push_back({
+                    object,
+                    object->fid,
+                    object->frame,
+                    ((object->rotation % ROTATION_COUNT) + ROTATION_COUNT) % ROTATION_COUNT,
+                    object->tile,
+                    static_cast<unsigned int>(proto->scenery.extendedFlags),
+                    doorWorldX,
+                    doorWorldY,
+                });
+            }
         }
     }
 
@@ -996,6 +1025,124 @@ void first_person_render()
         }
     }
 
+    // First-person doors are structural scenery, not billboards. Closed doors
+    // occupy the same wall lattice as the opening and participate in depth/pick
+    // testing. Fallout animates doors away from frame 0 while opening; those
+    // non-zero frames are treated as an open passage for this first milestone.
+    // Native collision/use logic remains authoritative.
+    constexpr double kDoorHeight = 1.55;
+    for (const FirstPersonDoorSprite& door : doors) {
+        if (door.frame != 0) {
+            continue;
+        }
+
+        FirstPersonWallMaterial* material =
+            getWallMaterial(door.fid, door.direction);
+        if (material == nullptr || material->width <= 0 || material->height <= 0) {
+            continue;
+        }
+
+        auto doorSegments = first_person_wall_segments(
+            door.tile,
+            door.extendedFlags,
+            door.direction,
+            door.worldX,
+            door.worldY);
+
+        for (FirstPersonWallSegment sourceSegment : doorSegments) {
+            sourceSegment.u0 = 0.0;
+            sourceSegment.u1 = 1.0;
+            const FirstPersonWallSegment segment =
+                first_person_overlap_wall_segment(sourceSegment, 0.02);
+
+            const double adx = segment.ax - playerWorldX;
+            const double ady = segment.ay - playerWorldY;
+            const double bdx = segment.bx - playerWorldX;
+            const double bdy = segment.by - playerWorldY;
+            double ax = adx * rightX + ady * rightY;
+            double az = adx * forwardX + ady * forwardY;
+            double bx = bdx * rightX + bdy * rightY;
+            double bz = bdx * forwardX + bdy * forwardY;
+
+            double u0 = segment.u0;
+            double u1 = segment.u1;
+            if (!first_person_clip_wall(ax, az, bx, bz, u0, u1, kNearPlane)) {
+                continue;
+            }
+
+            const int screenAX = width / 2 + static_cast<int>(ax * focal / az);
+            const int screenBX = width / 2 + static_cast<int>(bx * focal / bz);
+            const int bottomAY = horizon + static_cast<int>(focal * kEyeHeight / az);
+            const int bottomBY = horizon + static_cast<int>(focal * kEyeHeight / bz);
+            const int topAY = bottomAY - static_cast<int>(focal * kDoorHeight / az);
+            const int topBY = bottomBY - static_cast<int>(focal * kDoorHeight / bz);
+
+            const int minX = std::max(0, std::min(screenAX, screenBX));
+            const int maxX = std::min(width - 1, std::max(screenAX, screenBX));
+            const double screenSpan = static_cast<double>(screenBX - screenAX);
+            if (minX > maxX || std::abs(screenSpan) < 1.0) {
+                continue;
+            }
+
+            const double invAz = 1.0 / az;
+            const double invBz = 1.0 / bz;
+            for (int screenX = minX; screenX <= maxX; screenX++) {
+                const double s = (screenX - screenAX) / screenSpan;
+                if (s < 0.0 || s > 1.0) {
+                    continue;
+                }
+
+                const double invZ = invAz + (invBz - invAz) * s;
+                if (invZ <= 0.0) {
+                    continue;
+                }
+
+                const double z = 1.0 / invZ;
+                const double worldT =
+                    ((1.0 - s) * u0 * invAz + s * u1 * invBz) / invZ;
+                const int bottom = static_cast<int>(
+                    bottomAY + (bottomBY - bottomAY) * s);
+                const int top = static_cast<int>(
+                    topAY + (topBY - topAY) * s);
+                const int columnHeight = bottom - top;
+                if (columnHeight <= 0) {
+                    continue;
+                }
+
+                const int materialX = std::clamp(
+                    static_cast<int>(std::lround(
+                        std::clamp(worldT, 0.0, 1.0)
+                        * std::max(0, material->width - 1))),
+                    0,
+                    std::max(0, material->width - 1));
+
+                for (int screenY = std::max(0, top);
+                     screenY <= std::min(height - 1, bottom);
+                     screenY++) {
+                    const int materialY = std::clamp(
+                        (screenY - top) * material->height / columnHeight,
+                        0,
+                        std::max(0, material->height - 1));
+                    const unsigned char pixel =
+                        material->pixels[materialY * material->width + materialX];
+                    if (pixel == 0) {
+                        continue;
+                    }
+
+                    const int destination = screenY * width + screenX;
+                    if (z < depthBuffer[destination]) {
+                        buffer[destination] = pixel;
+                        depthBuffer[destination] = z;
+                        gFirstPersonPicks[destination] = {
+                            door.object,
+                            door.object->id,
+                        };
+                    }
+                }
+            }
+        }
+    }
+
     // v0.011: expose the rest of Fallout's map objects in first person.
     // This is intentionally a billboard pass for now: scenery, critters,
     // items and misc objects use their live FRM/frame/rotation, anchored to
@@ -1018,6 +1165,17 @@ void first_person_render()
             && type != OBJ_TYPE_SCENERY
             && type != OBJ_TYPE_MISC) {
             continue;
+        }
+
+        if (type == OBJ_TYPE_SCENERY) {
+            Proto* sceneryProto = nullptr;
+            if (PID_TYPE(object->pid) == OBJ_TYPE_SCENERY
+                && proto_ptr(object->pid, &sceneryProto) == 0
+                && sceneryProto != nullptr
+                && sceneryProto->scenery.type == SCENERY_TYPE_DOOR) {
+                // Doors have their own structural pass above.
+                continue;
+            }
         }
 
         double objectWorldX;
