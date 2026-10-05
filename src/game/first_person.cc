@@ -1264,12 +1264,55 @@ void first_person_render()
             }
         }
         const double planeHeight = door.portal ? kStructuralWallHeight : kDoorHeight;
+        if (door.portal && !doorSegments.empty()) {
+            // Keep the verified central lattice plane, with two visual faces
+            // and narrow returns. No native footprint or collision changes.
+            constexpr double halfDepth = 0.06;
+            const FirstPersonWallSegment center = doorSegments.front();
+            const double dx = center.bx - center.ax;
+            const double dy = center.by - center.ay;
+            const double length = std::hypot(dx, dy);
+            if (length > 0.0) {
+                const double nx = -dy / length * halfDepth;
+                const double ny = dx / length * halfDepth;
+                doorSegments.clear();
+                doorSegments.push_back({ center.ax + nx, center.ay + ny,
+                    center.bx + nx, center.by + ny, 0.0, 1.0 });
+                doorSegments.push_back({ center.ax - nx, center.ay - ny,
+                    center.bx - nx, center.by - ny, 0.0, 1.0 });
+                auto addReturn = [&](double u, double sampleU) {
+                    const double x = center.ax + dx * u;
+                    const double y = center.ay + dy * u;
+                    doorSegments.push_back({ x - nx, y - ny, x + nx, y + ny, sampleU, sampleU });
+                };
+                addReturn(0.0, 0.0);
+                addReturn(1.0, 1.0);
+                // Locate the central opening at lower-post height. Sample the
+                // adjacent solid column for each inner jamb return. Preserve
+                // alpha up the column so arched trim is not turned into a box.
+                const int row = material->height * 4 / 5;
+                const int middle = material->width / 2;
+                if (material->width > 2 && material->pixels[row * material->width + middle] == 0) {
+                    int left = middle;
+                    int right = middle;
+                    while (left > 0 && material->pixels[row * material->width + left - 1] == 0) left--;
+                    while (right + 1 < material->width && material->pixels[row * material->width + right + 1] == 0) right++;
+                    const double scale = 1.0 / (material->width - 1);
+                    if (left > 0) addReturn(left * scale, (left - 1) * scale);
+                    if (right + 1 < material->width) addReturn(right * scale, (right + 1) * scale);
+                }
+            }
+        }
 
         for (FirstPersonWallSegment sourceSegment : doorSegments) {
-            sourceSegment.u0 = 0.0;
-            sourceSegment.u1 = 1.0;
-            const FirstPersonWallSegment segment =
-                first_person_overlap_wall_segment(sourceSegment, 0.02);
+            // Portal face/return UVs are already defined; native door faces
+            // retain their full-width mapping and existing seam overlap.
+            if (!door.portal) {
+                sourceSegment.u0 = 0.0;
+                sourceSegment.u1 = 1.0;
+            }
+            const FirstPersonWallSegment segment = door.portal ? sourceSegment
+                : first_person_overlap_wall_segment(sourceSegment, 0.02);
 
             const double adx = segment.ax - playerWorldX;
             const double ady = segment.ay - playerWorldY;
@@ -1467,7 +1510,10 @@ void first_person_render()
         const int projectedWidth = std::max(1, static_cast<int>(focal * worldWidth / object.z));
         const int projectedHeight = std::max(1, static_cast<int>(focal * worldHeight / object.z));
         const int centerX = width / 2 + static_cast<int>(object.x * focal / object.z);
-        const int bottom = horizon + std::clamp(static_cast<int>(focal * kEyeHeight / object.z), 0, height - horizon - 1);
+        // Project the actual ground anchor, even when it is below the viewport.
+        // Clipping belongs to the draw bounds, not to object placement: pinning
+        // this baseline to the screen made nearby scenery/corpses float upward.
+        const int bottom = horizon + static_cast<int>(focal * kEyeHeight / object.z);
         const int left = centerX - projectedWidth / 2;
         const int top = bottom - projectedHeight;
 

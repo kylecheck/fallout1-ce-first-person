@@ -400,3 +400,26 @@ farther down the corridor. Exports remain opt-in and run once per process.
 header-only columns, solid face filling, and empty input. The doorway suite now
 includes the elevator pairing and wrong-spacing rejection; existing wall
 geometry regression tests remain unchanged.
+
+## Large arch depth and nearby scenery grounding
+
+The verified `v13secr6.frm` frame now has front/back faces at +/-0.06 world
+units from its existing central wall-lattice plane. Narrow outer returns connect
+the two faces. Inner jamb returns are located from the central transparent run
+at 80% of the rectified frame height and sample an adjacent solid source column.
+Source alpha is preserved up each return. The arch opening remains clear;
+no collision, interaction, central placement, or camera-height changes are made.
+This is a first depth treatment: curved inner arch surfaces and the horizontal
+header underside are still absent, and the jamb sampling needs Deck review.
+
+Generic billboard baselines now project their actual ground anchor even below
+the viewport; only draw bounds clip them. Previously clamping that baseline to
+the viewport bottom raised nearby scenery and corpses as the camera approached.
+This correction applies to the round vault-door scenery and damaged panel while
+they retain their existing billboard orientation. The damaged `v13secr4.frm`
+pixels were absent from earlier radius-limited exports; the full-elevation art
+export added in the preceding build will supply them for structural conversion.
+
+The modified source passes the warning-clean compiler syntax check. Existing
+wall, doorway, and material regression suites pass. New depth and grounding
+behavior requires in-game visual testing against the user's assets.
