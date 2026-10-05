@@ -477,6 +477,8 @@ int gmouse_is_scrolling()
 // 0x443274
 void gmouse_bk_process()
 {
+    first_person_update();
+
     // 0x595214
     static Object* last_object;
 
@@ -494,7 +496,7 @@ void gmouse_bk_process()
         mouse_info();
 
         // NOTE: Uninline.
-        if (gmouse_scrolling_is_enabled()) {
+        if (!first_person_is_enabled() && gmouse_scrolling_is_enabled()) {
             mouse_get_position(&mouseX, &mouseY);
             int oldMouseCursor = gmouse_current_cursor;
 
@@ -537,7 +539,7 @@ void gmouse_bk_process()
 
     if (!gmouse_enabled) {
         // NOTE: Uninline.
-        if (gmouse_scrolling_is_enabled()) {
+        if (!first_person_is_enabled() && gmouse_scrolling_is_enabled()) {
             mouse_get_position(&mouseX, &mouseY);
             int oldMouseCursor = gmouse_current_cursor;
 
@@ -580,7 +582,8 @@ void gmouse_bk_process()
     mouse_get_position(&mouseX, &mouseY);
 
     int oldMouseCursor = gmouse_current_cursor;
-    if (gmouse_check_scrolling(mouseX, mouseY, MOUSE_CURSOR_NONE) == 0) {
+    if (!first_person_is_enabled()
+        && gmouse_check_scrolling(mouseX, mouseY, MOUSE_CURSOR_NONE) == 0) {
         switch (oldMouseCursor) {
         case MOUSE_CURSOR_SCROLL_NW:
         case MOUSE_CURSOR_SCROLL_N:
