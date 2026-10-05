@@ -643,3 +643,12 @@ First-person mode also suppresses Fallout's native edge-scrolling cursor logic.
 The full-screen overlay owns the playfield while active, so pushing the cursor
 toward an edge should no longer turn it into the legacy map-scroll arrows or
 let that hidden isometric interaction layer interfere with free look.
+
+
+## Right-stick camera speed tuning
+
+Native right-stick yaw now turns at roughly 270 degrees/second at full
+deflection (18 of the internal 15-degree heading units per second), up from
+about 150 degrees/second. The dead zone and continuous heading model are
+unchanged; this is a responsiveness pass so free look reads as a camera rather
+than as a slightly faster version of the 15-degree D-pad turn step.
