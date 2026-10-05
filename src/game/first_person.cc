@@ -2226,6 +2226,111 @@ void first_person_render()
         }
     }
 
+    // First-person weapon presentation. Reuse the equipped item's original
+    // inventory art from the local Fallout data files as an initial 2D/2.5D
+    // viewmodel layer. This deliberately keeps gameplay state native: changing
+    // hands or weapons changes the presented art automatically.
+    {
+        Object* heldItem = nullptr;
+        if (intface_get_current_item(&heldItem) == 0
+            && heldItem != nullptr
+            && item_get_type(heldItem) == ITEM_TYPE_WEAPON) {
+            const int inventoryFid = item_inv_fid(heldItem);
+            if (inventoryFid >= 0 && art_exists(inventoryFid)) {
+                CacheEntry* weaponArtKey = nullptr;
+                Art* weaponArt = art_ptr_lock(inventoryFid, &weaponArtKey);
+                if (weaponArt != nullptr) {
+                    ArtFrame* weaponFrame = frame_ptr(weaponArt, 0, 0);
+                    unsigned char* weaponPixels = art_frame_data(weaponArt, 0, 0);
+                    if (weaponFrame != nullptr
+                        && weaponPixels != nullptr
+                        && weaponFrame->width > 0
+                        && weaponFrame->height > 0) {
+                        int opaqueMinX = weaponFrame->width;
+                        int opaqueMinY = weaponFrame->height;
+                        int opaqueMaxX = -1;
+                        int opaqueMaxY = -1;
+
+                        for (int sy = 0; sy < weaponFrame->height; sy++) {
+                            for (int sx = 0; sx < weaponFrame->width; sx++) {
+                                if (weaponPixels[sy * weaponFrame->width + sx] != 0) {
+                                    opaqueMinX = std::min(opaqueMinX, sx);
+                                    opaqueMinY = std::min(opaqueMinY, sy);
+                                    opaqueMaxX = std::max(opaqueMaxX, sx);
+                                    opaqueMaxY = std::max(opaqueMaxY, sy);
+                                }
+                            }
+                        }
+
+                        if (opaqueMaxX >= opaqueMinX && opaqueMaxY >= opaqueMinY) {
+                            const int sourceWidth = opaqueMaxX - opaqueMinX + 1;
+                            const int sourceHeight = opaqueMaxY - opaqueMinY + 1;
+                            const bool raised =
+                                gmouse_3d_get_mode() == GAME_MOUSE_MODE_CROSSHAIR;
+
+                            // Inventory art is not authored as a viewmodel, so
+                            // preserve its aspect ratio and give it a restrained
+                            // lower-right presentation for now. Attack mode
+                            // raises/scales it slightly as a simple ready pose.
+                            const double maxWidth =
+                                width * (raised ? 0.40 : 0.34);
+                            const double maxHeight =
+                                height * (raised ? 0.42 : 0.36);
+                            const double scale = std::min(
+                                maxWidth / sourceWidth,
+                                maxHeight / sourceHeight);
+                            const int drawWidth = std::max(
+                                1,
+                                static_cast<int>(std::lround(sourceWidth * scale)));
+                            const int drawHeight = std::max(
+                                1,
+                                static_cast<int>(std::lround(sourceHeight * scale)));
+
+                            const int centerX = width * 68 / 100;
+                            const int left = std::clamp(
+                                centerX - drawWidth / 2,
+                                -drawWidth + 1,
+                                width - 1);
+                            const int bottom =
+                                height - (raised ? height / 18 : -height / 24);
+                            const int top = bottom - drawHeight;
+
+                            for (int dy = 0; dy < drawHeight; dy++) {
+                                const int py = top + dy;
+                                if (py < 0 || py >= height) {
+                                    continue;
+                                }
+
+                                const int sy = opaqueMinY + std::clamp(
+                                    dy * sourceHeight / drawHeight,
+                                    0,
+                                    sourceHeight - 1);
+                                for (int dx = 0; dx < drawWidth; dx++) {
+                                    const int px = left + dx;
+                                    if (px < 0 || px >= width) {
+                                        continue;
+                                    }
+
+                                    const int sx = opaqueMinX + std::clamp(
+                                        dx * sourceWidth / drawWidth,
+                                        0,
+                                        sourceWidth - 1);
+                                    const unsigned char pixel =
+                                        weaponPixels[sy * weaponFrame->width + sx];
+                                    if (pixel != 0) {
+                                        buffer[py * width + px] = pixel;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    art_ptr_unlock(weaponArtKey);
+                }
+            }
+        }
+    }
+
     // Persistent first-person HUD. Keep it intentionally compact: mirror
     // native character/weapon state without replacing Fallout's systems.
     {
