@@ -107,3 +107,29 @@ The tab-separated diagnostic contains map name, elevation, player tile and
 rotation, every wall/scenery object on that elevation (including hidden objects
 and invisible blocker art), prototype flags, scenery subtype, art name, frame
 metadata and six native neighboring tiles.
+
+
+## Corner-gap correction
+
+The first prototype-driven build still left a large opening at some inside
+corners. The cause was structural rather than a missing black wall asset.
+
+East/West wall centers require a +/-0.25 world-Y parity correction because the
+hex centers zigzag. North/South wall centers do not. The previous corner helper
+applied the shifted center to both axes and then gave the vertical arm a fixed
+0.5-unit length. That left a quarter-hex hole on one parity/direction and
+overextended the opposite case.
+
+Corners now use two different references:
+
+- horizontal vertex: parity-corrected East/West lattice
+- vertical endpoint: the real North/South boundary at worldY +/- 0.5
+
+Real VAULTBUR examples are covered by regression tests, including 13078->13079,
+13878->13678/13877, and 13890->13690/13891. Odd-column synthetic cases are also
+tested.
+
+The renderer also uses a slightly larger world-space overlap at joins and a
+small endpoint-only opaque-pixel repair for sloped isometric FRM edges. These
+measures are deliberately local: they should hide projection/alpha cracks
+without filling authored windows or turning genuine door openings into walls.
