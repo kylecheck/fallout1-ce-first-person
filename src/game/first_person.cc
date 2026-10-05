@@ -586,7 +586,16 @@ void first_person_render()
         const double worldHeight = debugWalls ? 1.65
             : std::clamp(opaqueHeight * (1.65 / 110.0), 0.65, 1.85);
 
-        for (const FirstPersonWallSegment& segment : segments) {
+        for (const FirstPersonWallSegment& sourceSegment : segments) {
+            const double joinOverlap = wallKind == FIRST_PERSON_WALL_NORTH_CORNER
+                    || wallKind == FIRST_PERSON_WALL_SOUTH_CORNER
+                    || wallKind == FIRST_PERSON_WALL_EAST_CORNER
+                    || wallKind == FIRST_PERSON_WALL_WEST_CORNER
+                ? 0.035
+                : 0.022;
+            const FirstPersonWallSegment segment =
+                first_person_overlap_wall_segment(sourceSegment, joinOverlap);
+
             const double endpointAX = segment.ax;
             const double endpointAY = segment.ay;
             const double endpointBX = segment.bx;
@@ -656,9 +665,28 @@ void first_person_render()
                         opaqueMinY + (screenY - top) * opaqueHeight / columnHeight,
                         opaqueMinY,
                         opaqueMaxY);
-                    const unsigned char pixel = debugWalls
+                    unsigned char pixel = debugWalls
                         ? colorTable[debugWallColor(wallKind)]
                         : pixels[sourceY * frame->width + sourceX];
+
+                    // Isometric wall FRMs often leave one or two transparent
+                    // columns at their edges. Even with structurally touching
+                    // planes those alpha margins show up as first-person cracks.
+                    // Only near a segment endpoint, borrow the nearest opaque
+                    // texel from the same scanline. Interior transparency is
+                    // preserved for authored holes/windows.
+                    if (!debugWalls && pixel == 0 && (s < 0.08 || s > 0.92)) {
+                        for (int radius = 1; radius <= 2 && pixel == 0; radius++) {
+                            const int leftX = sourceX - radius;
+                            const int rightX = sourceX + radius;
+                            if (leftX >= opaqueMinX) {
+                                pixel = pixels[sourceY * frame->width + leftX];
+                            }
+                            if (pixel == 0 && rightX <= opaqueMaxX) {
+                                pixel = pixels[sourceY * frame->width + rightX];
+                            }
+                        }
+                    }
                     if (pixel == 0) {
                         continue;
                     }
