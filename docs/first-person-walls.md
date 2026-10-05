@@ -1,59 +1,80 @@
 # First-person wall reconstruction
 
-This milestone replaces camera-filtered axis voting with native hex adjacency.
-It does not change floor/world mapping, input, the R5/F11/0 toggle, native
-movement, mouse targeting, or the shared depth buffer.
+This milestone replaces native-neighbor connection guessing with Fallout's own
+wall prototype classification. It does not change floor/world mapping, input,
+the R5/F11/0 toggle, native movement, mouse targeting, or the shared depth
+buffer.
 
-## Structure and materials
+## What the map snapshot established
 
-- Collect visible wall objects in a radius of 19 hexes on the current elevation,
-  including those behind the camera. Hidden objects and `block.frm` do not
-  contribute. The outer ring supplies topology for the rendered radius of 18.
-- Use `tile_num_in_direction` and a tile occupancy set for six native neighbor
-  queries per object. Ignore the native API's self-return at map boundaries.
-- Each object owns half of every connection, ending at a shared midpoint.
-  Corners retain multiple arms. A one-neighbor endpoint extends half a hex in
-  the opposite direction. An isolated piece uses rotation as a provisional
-  axis, with a one-unit footprint.
-- Build horizontal segments independently of FRM anchors and opaque width.
-  The normal material pass still crops the original FRM and estimates height.
-- Clip segment endpoints against the near plane only after reconstruction,
-  interpolating UVs with those endpoints. Rasterization retains depth testing.
+The VAULTBUR diagnostic showed that visible walls already carry a structural
+class in the high bits of prototype `extendedFlags` (the engine's Wall Light
+Type field):
 
-This is an adjacency model, not a definitive interpretation of every Fallout
-wall prototype. Touching decorative walls, neighboring parallel chains and
-triangular clusters can produce extra connections. Isolated special pieces
-may need explicit prototype metadata. Original isometric textures still have
-transparent margins/slopes inside their crop; their reconstruction is a
-separate unfinished task. Duplicate objects on one tile share connectivity
-but retain their individual art. Doors remain in the scenery billboard pass.
+- `0x00000000`: north/south
+- `0x08000000`: east/west
+- `0x10000000`: north corner
+- `0x20000000`: south corner
+- `0x40000000`: east corner
+- `0x80000000`: west corner
 
-## Steam Deck validation
+Low action bits such as `0x2000` are ignored for structural classification.
 
-Build normally, then load the same save used for the previous prototype.
+Long east/west runs in the snapshot alternate between neighboring hex columns.
+Their hex centers therefore zigzag by half a world-Y unit even though the wall
+art represents one straight wall. The renderer now corrects that parity offset
+and emits one straight east/west line. North/south pieces already align on the
+world-Y basis.
 
-1. Toggle with R5 and turn through all six directions beside a room corner.
-   Wall footprints should stay fixed when neighbors pass behind the camera.
-2. Approach a wall and rotate beside it. A visible portion must survive even
-   when its center is behind the near plane; texture coordinates should not
-   reset to the full image at the clipped endpoint.
-3. Inspect straight chains, corners, junctions, ends, doors and isolated pieces.
-4. Confirm floor alignment, native movement, toggle behavior and mouse hex
-   highlighting still behave as before. The existing mouse click discrepancy
-   reported before this milestone is not addressed here.
+The snapshot also contained many `block.frm` wall and scenery objects around
+visible wall runs. They remain invisible in first person. They are useful later
+for collision/validation, but are no longer treated as visible wall
+connectivity.
 
-For a geometry-only view, launch the built executable from the game-data
-working directory with:
+## Geometry rules
+
+Wall structure is now chosen in this order:
+
+1. Read the wall PRO's `extendedFlags`.
+2. Classify the piece as north/south, east/west, or one of four corner types.
+3. Emit fixed world-space geometry from that class and the established tile
+   world mapping.
+4. Camera transform, near-plane clipping and depth rasterization happen only
+   after structural geometry exists.
+5. FRM cropping/height/texturing remain a separate material approximation.
+
+Object rotation and FRM width/anchor no longer select structural orientation.
+Native hex adjacency also no longer creates wall branches. This specifically
+removes the false zigzags and three/four-way junctions seen in the previous
+adjacency build.
+
+Corner arm directions are based on the VAULTBUR wall-map relationships and are
+still considered a runtime-validation target. Texture reconstruction for
+corners remains approximate because one isometric FRM is being projected onto
+two first-person planes.
+
+## Geometry-only debug view
+
+Launch with:
 
 ```sh
 FALLOUT_FP_WALL_DEBUG=1 /path/to/fallout-ce
 ```
 
-Or prefix the Steam launch options with `FALLOUT_FP_WALL_DEBUG=1 %command%`.
-Green = connected piece, yellow = more than two neighbors, red = isolated
-rotation fallback. Debug walls have a uniform height and opaque fill, bypass
-FRM loading, and use normal segment clipping and depth testing. Remove the
-environment variable and restart to restore textures (even `=0` enables it).
+The debug view bypasses FRM pixels and uses the same depth/clipping path with
+solid colors:
+
+- red: north/south
+- green: east/west
+- blue: north corner
+- yellow: south corner
+- magenta: east corner
+- cyan: west corner
+
+This is the preferred validation mode for the next Deck recording. Straight
+runs should no longer zigzag as the camera turns. Corners should stay fixed in
+world space and should not sprout extra branches merely because another wall
+occupies an adjacent hex.
 
 ## Automated checks
 
@@ -66,27 +87,15 @@ g++ -std=c++17 -Wall -Wextra -Werror -Isrc \
 /tmp/fallout-wall-test
 ```
 
-The fixture mirrors tile.cc's native 200-column neighbor table and boundary
-behavior. It exercises both column parities, all six directions, midpoint
-joins, endpoints, corners, junctions, isolated/map-edge tiles, and near-plane
-UV clipping. It is not a real-map or gameplay test.
-
-Validation here: renderer translation unit compiled with warnings as errors;
-regression test passed with ASan/UBSan (leak detection disabled because the
-execution environment blocks LeakSanitizer's process inspection). Full game
-linking and visual validation remain unverified: CMake/SDL are unavailable in
-this environment and the package manager cannot install them.
+The test verifies Wall Light Type masking, both straight wall axes, east/west
+hex-parity correction, the four corner direction patterns, and near-plane UV
+clipping.
 
 ## Export actual map topology
 
-The solid-color Deck recording confirmed that gaps persist without FRM texture
-transparency. Yellow sections also show multiple adjacency links. Neither fact
-alone establishes which missing faces should be filled. Inspect the source map
-objects before changing connection rules or inventing wall planes.
-
-Set `FALLOUT_FP_MAP_DUMP` to an output text-file path to export once per process,
-on the first first-person frame after loading a map/save. This is independent of
-`FALLOUT_FP_WALL_DEBUG`; neither option changes saved game data.
+Set `FALLOUT_FP_MAP_DUMP` to an output text-file path to export once per
+process, on the first first-person frame after loading a map/save. This remains
+independent of `FALLOUT_FP_WALL_DEBUG`.
 
 ```sh
 cd "/home/deck/.local/share/Steam/steamapps/common/Fallout/" && \
@@ -94,17 +103,7 @@ FALLOUT_FP_MAP_DUMP="$HOME/Desktop/fallout-wall-map.txt" \
   ~/fallout1-ce-first-person/build/fallout-ce
 ```
 
-Load the test save, then toggle R5. The terminal reports success or failure.
-Attach `fallout-wall-map.txt` from the Desktop. No further video is needed for
-this step. Restart the process to take a different snapshot.
-
-The tab-separated diagnostic contains the map name, elevation, player tile and
+The tab-separated diagnostic contains map name, elevation, player tile and
 rotation, every wall/scenery object on that elevation (including hidden objects
-and invisible blocker art), prototype flags, scenery subtype, art name, current
-frame dimensions/offsets and six native neighboring tiles. It contains metadata,
-not game art pixels or the save itself. The explicitly named output file is
-replaced on the next run with the option enabled. Parent directories must exist.
-
-The purpose is to distinguish omitted/invisible geometry, door scenery, special
-wall prototypes and false connections between nearby wall chains. Merely closing
-all visible gaps would risk putting walls across real doors and passages.
+and invisible blocker art), prototype flags, scenery subtype, art name, frame
+metadata and six native neighboring tiles.
