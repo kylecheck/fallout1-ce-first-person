@@ -2072,7 +2072,33 @@ void first_person_render()
             }
 
             if (maxPickX >= minPickX && maxPickY >= minPickY) {
-                const int highlightColor = colorTable[31744];
+                const bool attackTarget =
+                    gmouse_3d_get_mode() == GAME_MOUSE_MODE_CROSSHAIR
+                    && FID_TYPE(hoverPick.object->fid) == OBJ_TYPE_CRITTER
+                    && hoverPick.object != obj_dude;
+                const int highlightColor =
+                    attackTarget ? colorTable[992] : colorTable[31744];
+
+                // In attack mode, translate the original visible critter sprite
+                // into a lightweight Fallout-green targeting treatment. Only
+                // pixels that actually belong to this depth-tested critter are
+                // touched, so walls/scenery in front continue to occlude it.
+                // A checker pattern leaves enough of the source art visible to
+                // retain the original sprite identity.
+                if (attackTarget) {
+                    for (int py = minPickY; py <= maxPickY; py++) {
+                        for (int px = minPickX; px <= maxPickX; px++) {
+                            const FirstPersonPick pick =
+                                gFirstPersonPicks[py * width + px];
+                            if (pick.object == hoverPick.object
+                                && pick.id == hoverPick.id
+                                && ((px + py) & 1) == 0) {
+                                buffer[py * width + px] = highlightColor;
+                            }
+                        }
+                    }
+                }
+
                 constexpr int kPad = 2;
                 constexpr int kCorner = 5;
                 const int left = std::max(0, minPickX - kPad);
@@ -2095,6 +2121,106 @@ void first_person_render()
                     putHighlight(left, bottom - i);
                     putHighlight(right - i, bottom);
                     putHighlight(right, bottom - i);
+                }
+
+                if (attackTarget) {
+                    int hitMode = 0;
+                    bool aiming = false;
+                    char targetLabel[96];
+                    const char* name = critter_name(hoverPick.object);
+                    if (name == nullptr || *name == '\0') {
+                        name = "CRITTER";
+                    }
+
+                    if (intface_get_attack(&hitMode, &aiming) == 0) {
+                        const int badShot = combat_check_bad_shot(
+                            obj_dude,
+                            hoverPick.object,
+                            hitMode,
+                            aiming);
+                        if (badShot == COMBAT_BAD_SHOT_OK) {
+                            const int accuracy = determine_to_hit(
+                                obj_dude,
+                                hoverPick.object,
+                                HIT_LOCATION_UNCALLED,
+                                hitMode);
+                            std::snprintf(
+                                targetLabel,
+                                sizeof(targetLabel),
+                                "%s  %d%%",
+                                name,
+                                std::clamp(accuracy, 0, 95));
+                        } else {
+                            const char* reason = "BLOCKED";
+                            switch (badShot) {
+                            case COMBAT_BAD_SHOT_NO_AMMO:
+                                reason = "NO AMMO";
+                                break;
+                            case COMBAT_BAD_SHOT_OUT_OF_RANGE:
+                                reason = "OUT OF RANGE";
+                                break;
+                            case COMBAT_BAD_SHOT_NOT_ENOUGH_AP:
+                                reason = "NO AP";
+                                break;
+                            case COMBAT_BAD_SHOT_ALREADY_DEAD:
+                                reason = "DEAD";
+                                break;
+                            case COMBAT_BAD_SHOT_AIM_BLOCKED:
+                                reason = "BLOCKED";
+                                break;
+                            case COMBAT_BAD_SHOT_ARM_CRIPPLED:
+                                reason = "ARM CRIPPLED";
+                                break;
+                            case COMBAT_BAD_SHOT_BOTH_ARMS_CRIPPLED:
+                                reason = "ARMS CRIPPLED";
+                                break;
+                            default:
+                                break;
+                            }
+                            std::snprintf(
+                                targetLabel,
+                                sizeof(targetLabel),
+                                "%s  %s",
+                                name,
+                                reason);
+                        }
+                    } else {
+                        std::snprintf(
+                            targetLabel,
+                            sizeof(targetLabel),
+                            "%s",
+                            name);
+                    }
+
+                    const int oldFont = text_curr();
+                    text_font(101);
+                    const int labelPadding = 2;
+                    const int labelWidth = std::min(
+                        width,
+                        text_width(targetLabel) + labelPadding * 2);
+                    const int labelHeight = text_height() + labelPadding * 2;
+                    const int labelX = std::clamp(
+                        (left + right - labelWidth) / 2,
+                        0,
+                        std::max(0, width - labelWidth));
+                    const int labelY = std::max(0, top - labelHeight - 2);
+
+                    if (labelWidth > 0 && labelHeight > 0) {
+                        buf_fill(
+                            buffer + labelY * width + labelX,
+                            labelWidth,
+                            labelHeight,
+                            width,
+                            colorTable[0]);
+                        text_to_buf(
+                            buffer + (labelY + labelPadding) * width
+                                + labelX + labelPadding,
+                            targetLabel,
+                            std::max(0, labelWidth - labelPadding * 2),
+                            width,
+                            highlightColor);
+                    }
+                    text_font(oldFont);
                 }
             }
         }
