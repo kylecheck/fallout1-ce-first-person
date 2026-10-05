@@ -104,6 +104,20 @@ int main()
             1.0));
     }
 
+
+    // Seam overlap extends geometry and UVs symmetrically without changing the
+    // segment axis. Adjacent pieces therefore overlap slightly instead of
+    // exposing a one-pixel crack after projection.
+    {
+        FirstPersonWallSegment s { 0.0, 0.0, 1.0, 0.0, 0.0, 1.0 };
+        const auto overlapped = first_person_overlap_wall_segment(s, 0.05);
+        assert(close(overlapped.ax, -0.05));
+        assert(close(overlapped.bx, 1.05));
+        assert(close(overlapped.ay, 0.0) && close(overlapped.by, 0.0));
+        assert(close(overlapped.u0, -0.05));
+        assert(close(overlapped.u1, 1.05));
+    }
+
     // Near-plane clipping must preserve the correct texture fraction.
     double ax = 0, az = 0, bx = 2, bz = 2, u0 = 0, u1 = 1;
     assert(first_person_clip_wall(ax, az, bx, bz, u0, u1, 0.5));
