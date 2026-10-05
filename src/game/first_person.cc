@@ -34,7 +34,7 @@
 namespace fallout {
 
 static bool gFirstPersonEnabled = false;
-static constexpr double kFirstPersonEyeHeight = 0.62;
+static constexpr double kFirstPersonEyeHeight = 0.68;
 static int gFirstPersonWindow = -1;
 static bool gFirstPersonRestoreInterface = false;
 // Camera heading is measured in 15-degree units, but stored continuously so
