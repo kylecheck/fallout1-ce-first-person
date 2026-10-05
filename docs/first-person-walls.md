@@ -76,3 +76,35 @@ regression test passed with ASan/UBSan (leak detection disabled because the
 execution environment blocks LeakSanitizer's process inspection). Full game
 linking and visual validation remain unverified: CMake/SDL are unavailable in
 this environment and the package manager cannot install them.
+
+## Export actual map topology
+
+The solid-color Deck recording confirmed that gaps persist without FRM texture
+transparency. Yellow sections also show multiple adjacency links. Neither fact
+alone establishes which missing faces should be filled. Inspect the source map
+objects before changing connection rules or inventing wall planes.
+
+Set `FALLOUT_FP_MAP_DUMP` to an output text-file path to export once per process,
+on the first first-person frame after loading a map/save. This is independent of
+`FALLOUT_FP_WALL_DEBUG`; neither option changes saved game data.
+
+```sh
+cd "/home/deck/.local/share/Steam/steamapps/common/Fallout/" && \
+FALLOUT_FP_MAP_DUMP="$HOME/Desktop/fallout-wall-map.txt" \
+  ~/fallout1-ce-first-person/build/fallout-ce
+```
+
+Load the test save, then toggle R5. The terminal reports success or failure.
+Attach `fallout-wall-map.txt` from the Desktop. No further video is needed for
+this step. Restart the process to take a different snapshot.
+
+The tab-separated diagnostic contains the map name, elevation, player tile and
+rotation, every wall/scenery object on that elevation (including hidden objects
+and invisible blocker art), prototype flags, scenery subtype, art name, current
+frame dimensions/offsets and six native neighboring tiles. It contains metadata,
+not game art pixels or the save itself. The explicitly named output file is
+replaced on the next run with the option enabled. Parent directories must exist.
+
+The purpose is to distinguish omitted/invisible geometry, door scenery, special
+wall prototypes and false connections between nearby wall chains. Merely closing
+all visible gaps would risk putting walls across real doors and passages.

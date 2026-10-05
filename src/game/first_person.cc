@@ -14,6 +14,7 @@
 #include "game/object_types.h"
 #include "game/tile.h"
 #include "game/object.h"
+#include "game/proto.h"
 #include "plib/color/color.h"
 #include "plib/gnw/gnw.h"
 #include "plib/gnw/grbuf.h"
@@ -149,6 +150,82 @@ Object* first_person_object_at(int screenX, int screenY, int objectType, bool in
     return nullptr;
 }
 
+// Opt-in snapshot for inspecting actual map topology rather than inferring it
+// from a filmed viewport. Export once per process, on the first FP frame after
+// loading a save. Include hidden/invisible walls and scenery (including doors).
+static void first_person_dump_map()
+{
+    static bool attempted = false;
+    const char* path = std::getenv("FALLOUT_FP_MAP_DUMP");
+    if (attempted || path == nullptr || *path == '\0') {
+        return;
+    }
+    attempted = true;
+    FILE* output = std::fopen(path, "w");
+    if (output == nullptr) {
+        std::perror("First-person map dump");
+        return;
+    }
+    std::fprintf(output, "# map=%.16s elevation=%d player_tile=%d rotation=%d\n",
+        map_data.name, map_elevation, obj_dude->tile, obj_dude->rotation);
+    std::fprintf(output, "id\ttype\ttile\trotation\tfid\tpid\tflags\tproto_flags\textended_flags\tscenery_type\tart\twidth\theight\tframe_x\tframe_y\tneighbor0\tneighbor1\tneighbor2\tneighbor3\tneighbor4\tneighbor5\n");
+    for (Object* object = obj_find_first_at(map_elevation);
+         object != nullptr; object = obj_find_next_at()) {
+        const int type = FID_TYPE(object->fid);
+        if (type != OBJ_TYPE_WALL && type != OBJ_TYPE_SCENERY) {
+            continue;
+        }
+        Proto* proto = nullptr;
+        unsigned int protoFlags = 0;
+        unsigned int extendedFlags = 0;
+        int sceneryType = -1;
+        if (proto_ptr(object->pid, &proto) == 0 && proto != nullptr) {
+            if (type == OBJ_TYPE_WALL && PID_TYPE(object->pid) == OBJ_TYPE_WALL) {
+                protoFlags = proto->wall.flags;
+                extendedFlags = proto->wall.extendedFlags;
+            } else if (type == OBJ_TYPE_SCENERY && PID_TYPE(object->pid) == OBJ_TYPE_SCENERY) {
+                protoFlags = proto->scenery.flags;
+                extendedFlags = proto->scenery.extendedFlags;
+                sceneryType = proto->scenery.type;
+            }
+        }
+        char artName[64] = { 0 };
+        art_get_base_name(type, object->fid & 0xFFF, artName);
+        int width = 0, height = 0, frameX = 0, frameY = 0;
+        CacheEntry* entry = nullptr;
+        Art* art = art_ptr_lock(object->fid, &entry);
+        if (art != nullptr) {
+            const int direction = ((object->rotation % ROTATION_COUNT) + ROTATION_COUNT) % ROTATION_COUNT;
+            const int number = std::clamp(object->frame, 0, std::max(0, art_frame_max_frame(art) - 1));
+            ArtFrame* frame = frame_ptr(art, number, direction);
+            if (frame != nullptr) {
+                width = frame->width;
+                height = frame->height;
+                frameX = frame->x;
+                frameY = frame->y;
+            }
+            art_ptr_unlock(entry);
+        }
+        std::fprintf(output, "%d\t%d\t%d\t%d\t%d\t%d\t%08x\t%08x\t%08x\t%d\t%s\t%d\t%d\t%d\t%d",
+            object->id, type, object->tile, object->rotation, object->fid,
+            object->pid, static_cast<unsigned int>(object->flags), protoFlags,
+            extendedFlags, sceneryType, artName, width, height, frameX, frameY);
+        for (int direction = 0; direction < ROTATION_COUNT; direction++) {
+            const int neighbor = object->tile >= 0 && object->tile < 40000
+                ? tile_num_in_direction(object->tile, direction, 1) : -1;
+            std::fprintf(output, "\t%d", neighbor);
+        }
+        std::fprintf(output, "\n");
+    }
+    const bool writeFailed = std::ferror(output) != 0;
+    const int closeResult = std::fclose(output);
+    if (writeFailed || closeResult != 0) {
+        std::fprintf(stderr, "First-person map dump failed: %s\n", path);
+    } else {
+        std::fprintf(stderr, "First-person map dump saved: %s\n", path);
+    }
+}
+
 void first_person_render()
 {
     if (!gFirstPersonEnabled || obj_dude == nullptr || display_win == -1) {
@@ -165,6 +242,8 @@ void first_person_render()
     if (width <= 0 || height <= 0) {
         return;
     }
+
+    first_person_dump_map();
 
     gPickWidth = width;
     gPickHeight = height;
