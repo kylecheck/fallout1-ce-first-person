@@ -690,3 +690,12 @@ world changes and movement.
 Vertical right-stick look now runs at roughly 180 degrees/second at full deflection, up from 90, so pitch responds more closely to the faster horizontal free-look feel. The pitch limits themselves are unchanged.
 
 First-person eye height was raised again from 0.68 to 0.74 world units, matching the previous +0.06 calibration step. The shared projection/targeting eye-height value remains unified so floor targeting stays aligned with the higher viewpoint.
+
+
+## Native left-stick movement foundation
+
+The SDL left stick now supplies camera-relative movement intent directly to the first-person controller layer. The stick vector is converted into a direction relative to the current continuous camera heading, then quantized only at the final step to Fallout's six native hex directions.
+
+Movement still uses Fallout's native animation/pathing/collision request path (`register_object_move_to_tile`), so the stick does not move the player through arbitrary analog world coordinates. Forward, backward, and lateral/diagonal stick directions therefore become native neighboring-hex requests while preserving engine authority.
+
+A 32% movement dead zone and a short 120 ms repeat gate prevent idle drift and command spam. Steam Input should expose the left stick as a normal joystick/gamepad stick for this path; keyboard/D-pad emulation on the left stick should be disabled to avoid duplicate movement/turn commands.
