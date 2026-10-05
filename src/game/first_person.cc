@@ -480,6 +480,7 @@ void first_person_render()
     };
 
     std::vector<FirstPersonWallSprite> walls;
+    std::vector<FirstPersonWallSprite> blockWallHints;
     for (Object* wall = obj_find_first_at(map_elevation);
          wall != nullptr;
          wall = obj_find_next_at()) {
@@ -492,13 +493,28 @@ void first_person_render()
             continue;
         }
 
-        // block.frm is Fallout's 1x1 invisible collision/helper wall. Keep it
-        // out of visible geometry; the map dump shows these pieces densely
-        // tracing collision around otherwise visible walls and scenery.
+        // block.frm is invisible collision/topology data. Do not render its
+        // 1x1 art, but retain its tile: a chain of blocker cells between two
+        // compatible visible walls is strong evidence for a wall span that the
+        // original isometric artwork supplied only through overlap.
         const int frmId = wall->fid & 0xFFF;
         char artName[64] = { 0 };
-        if (art_get_base_name(OBJ_TYPE_WALL, frmId, artName) == -1
-            || std::strcmp(artName, "block.frm") == 0) {
+        if (art_get_base_name(OBJ_TYPE_WALL, frmId, artName) == -1) {
+            continue;
+        }
+        if (std::strcmp(artName, "block.frm") == 0) {
+            double blockWorldX;
+            double blockWorldY;
+            tileToWorld(wall->tile, &blockWorldX, &blockWorldY);
+            blockWallHints.push_back({
+                wall,
+                wall->fid,
+                ((wall->rotation % ROTATION_COUNT) + ROTATION_COUNT) % ROTATION_COUNT,
+                wall->tile,
+                0,
+                blockWorldX,
+                blockWorldY,
+            });
             continue;
         }
 
@@ -523,6 +539,116 @@ void first_person_render()
             wallWorldX,
             wallWorldY,
         });
+    }
+
+    // Promote only blocker cells that form a proven bridge between visible
+    // wall structure. This recovers spans such as VAULTBUR 13090 -> 13290
+    // (block.frm) -> 13490 without turning every collision helper into a wall.
+    //
+    // A bridge is accepted only when tracing both directions on one structural
+    // axis reaches compatible visible walls, passing exclusively through other
+    // block.frm cells. The synthetic cell inherits art from a real wall at one
+    // end, while its geometry is a normal straight structural segment.
+    auto wallAtTile = [&walls](int tile) -> const FirstPersonWallSprite* {
+        for (const FirstPersonWallSprite& candidate : walls) {
+            if (candidate.tile == tile) {
+                return &candidate;
+            }
+        }
+        return nullptr;
+    };
+
+    auto blockAtTile = [&blockWallHints](int tile) {
+        for (const FirstPersonWallSprite& block : blockWallHints) {
+            if (block.tile == tile) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    auto supportsVertical = [](FirstPersonWallKind kind) {
+        return kind == FIRST_PERSON_WALL_NORTH_SOUTH
+            || kind == FIRST_PERSON_WALL_NORTH_CORNER
+            || kind == FIRST_PERSON_WALL_SOUTH_CORNER
+            || kind == FIRST_PERSON_WALL_EAST_CORNER
+            || kind == FIRST_PERSON_WALL_WEST_CORNER;
+    };
+
+    auto supportsHorizontal = [](FirstPersonWallKind kind) {
+        return kind == FIRST_PERSON_WALL_EAST_WEST
+            || kind == FIRST_PERSON_WALL_NORTH_CORNER
+            || kind == FIRST_PERSON_WALL_SOUTH_CORNER
+            || kind == FIRST_PERSON_WALL_EAST_CORNER
+            || kind == FIRST_PERSON_WALL_WEST_CORNER;
+    };
+
+    struct WallBridgeEnd {
+        const FirstPersonWallSprite* wall;
+        int steps;
+    };
+
+    auto traceBridgeEnd = [&](int startTile, int delta, bool vertical) -> WallBridgeEnd {
+        int tile = startTile + delta;
+        for (int step = 1; step <= 6; step++, tile += delta) {
+            const FirstPersonWallSprite* candidate = wallAtTile(tile);
+            if (candidate != nullptr) {
+                const FirstPersonWallKind kind =
+                    first_person_wall_kind(candidate->extendedFlags);
+                const bool compatible = vertical
+                    ? supportsVertical(kind)
+                    : supportsHorizontal(kind);
+                return compatible
+                    ? WallBridgeEnd { candidate, step }
+                    : WallBridgeEnd { nullptr, step };
+            }
+            if (!blockAtTile(tile)) {
+                break;
+            }
+        }
+        return { nullptr, 0 };
+    };
+
+    for (const FirstPersonWallSprite& block : blockWallHints) {
+        const WallBridgeEnd verticalA = traceBridgeEnd(block.tile, -200, true);
+        const WallBridgeEnd verticalB = traceBridgeEnd(block.tile, 200, true);
+        const WallBridgeEnd horizontalA = traceBridgeEnd(block.tile, -1, false);
+        const WallBridgeEnd horizontalB = traceBridgeEnd(block.tile, 1, false);
+
+        const bool verticalBridge = verticalA.wall != nullptr && verticalB.wall != nullptr;
+        const bool horizontalBridge = horizontalA.wall != nullptr && horizontalB.wall != nullptr;
+        if (!verticalBridge && !horizontalBridge) {
+            continue;
+        }
+
+        // If a rare helper qualifies on both axes, choose the shorter proven
+        // bridge instead of creating an accidental four-way wall intersection.
+        bool useVertical = verticalBridge;
+        if (verticalBridge && horizontalBridge) {
+            useVertical = verticalA.steps + verticalB.steps
+                <= horizontalA.steps + horizontalB.steps;
+        }
+
+        const WallBridgeEnd& endA = useVertical ? verticalA : horizontalA;
+        const WallBridgeEnd& endB = useVertical ? verticalB : horizontalB;
+        const FirstPersonWallKind preferredKind = useVertical
+            ? FIRST_PERSON_WALL_NORTH_SOUTH
+            : FIRST_PERSON_WALL_EAST_WEST;
+
+        const FirstPersonWallSprite* materialSource = endA.wall;
+        if (first_person_wall_kind(endB.wall->extendedFlags) == preferredKind
+            && first_person_wall_kind(endA.wall->extendedFlags) != preferredKind) {
+            materialSource = endB.wall;
+        }
+
+        FirstPersonWallSprite bridge = *materialSource;
+        bridge.tile = block.tile;
+        bridge.extendedFlags = useVertical ? 0x00000000u : 0x08000000u;
+        bridge.worldX = block.worldX;
+        bridge.worldY = block.worldY;
+        // Keep the real wall as the pick owner; never expose the invisible
+        // collision helper as an interactable rendered object.
+        walls.push_back(bridge);
     }
 
     // Structural direction comes from each wall prototype's Wall Light Type.
