@@ -1646,6 +1646,95 @@ void first_person_render()
         art_ptr_unlock(cacheEntry);
     }
 
+    // Native Fallout outlines are painted by the isometric world renderer, so
+    // they are not visible when the first-person scene replaces that renderer.
+    // Give the pick buffer its own lightweight hover feedback instead. This
+    // uses the same small assist radius as first_person_object_at, highlights
+    // the actual visible pixels of the selected live object, and intentionally
+    // ignores walls so a room surface cannot steal interaction feedback from a
+    // nearby critter, item or scenery object.
+    if (mouseX >= 0 && mouseX < width && mouseY >= 0 && mouseY < height) {
+        constexpr int kPickAssistRadius = 6;
+        FirstPersonPick hoverPick { nullptr, -1 };
+        int bestDistanceSquared = kPickAssistRadius * kPickAssistRadius + 1;
+
+        for (int dy = -kPickAssistRadius; dy <= kPickAssistRadius; dy++) {
+            const int py = mouseY + dy;
+            if (py < 0 || py >= height) {
+                continue;
+            }
+
+            for (int dx = -kPickAssistRadius; dx <= kPickAssistRadius; dx++) {
+                const int distanceSquared = dx * dx + dy * dy;
+                if (distanceSquared > kPickAssistRadius * kPickAssistRadius
+                    || distanceSquared >= bestDistanceSquared) {
+                    continue;
+                }
+
+                const int px = mouseX + dx;
+                if (px < 0 || px >= width) {
+                    continue;
+                }
+
+                const FirstPersonPick candidate =
+                    gFirstPersonPicks[py * width + px];
+                if (candidate.object == nullptr
+                    || FID_TYPE(candidate.object->fid) == OBJ_TYPE_WALL) {
+                    continue;
+                }
+
+                hoverPick = candidate;
+                bestDistanceSquared = distanceSquared;
+            }
+        }
+
+        if (hoverPick.object != nullptr) {
+            int minPickX = width;
+            int minPickY = height;
+            int maxPickX = -1;
+            int maxPickY = -1;
+
+            for (int py = 0; py < height; py++) {
+                for (int px = 0; px < width; px++) {
+                    const FirstPersonPick pick = gFirstPersonPicks[py * width + px];
+                    if (pick.object == hoverPick.object && pick.id == hoverPick.id) {
+                        minPickX = std::min(minPickX, px);
+                        minPickY = std::min(minPickY, py);
+                        maxPickX = std::max(maxPickX, px);
+                        maxPickY = std::max(maxPickY, py);
+                    }
+                }
+            }
+
+            if (maxPickX >= minPickX && maxPickY >= minPickY) {
+                const int highlightColor = colorTable[31744];
+                constexpr int kPad = 2;
+                constexpr int kCorner = 5;
+                const int left = std::max(0, minPickX - kPad);
+                const int right = std::min(width - 1, maxPickX + kPad);
+                const int top = std::max(0, minPickY - kPad);
+                const int bottom = std::min(height - 1, maxPickY + kPad);
+
+                auto putHighlight = [&](int x, int y) {
+                    if (x >= 0 && x < width && y >= 0 && y < height) {
+                        buffer[y * width + x] = highlightColor;
+                    }
+                };
+
+                for (int i = 0; i < kCorner; i++) {
+                    putHighlight(left + i, top);
+                    putHighlight(left, top + i);
+                    putHighlight(right - i, top);
+                    putHighlight(right, top + i);
+                    putHighlight(left + i, bottom);
+                    putHighlight(left, bottom - i);
+                    putHighlight(right - i, bottom);
+                    putHighlight(right, bottom - i);
+                }
+            }
+        }
+    }
+
     // Draw an explicit first-person pointer after our scene has covered the
     // normal Fallout map cursor. This is intentionally simple and high contrast
     // for the prototype; the important part is that its tip and highlighted
