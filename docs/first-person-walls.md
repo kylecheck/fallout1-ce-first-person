@@ -736,3 +736,10 @@ Attack pose detection follows the player's native critter animation (melee, thro
 First-person attack mode now treats the center reticle as the authoritative combat pick point. Right-stick camera aim therefore drives the same critter selection used by the green target treatment, hit-chance HUD, hover feedback, and native `combat_attack_this` path. Normal interaction mode still uses the real mouse/trackpad pointer.
 
 Wall materials are now cached across first-person frames instead of being re-extracted and rectified from their source FRMs on every redraw. This removes a large amount of repeated CPU work in bigger maps such as the starting Vault, while leaving established wall geometry, topology reconstruction, and projection math unchanged.
+
+
+## Unified center-reticle world input and render-buffer reuse
+
+All first-person world modes now use the center reticle as the authoritative pointer. Move targeting, inspect/use object selection, combat target selection, hover feedback, and the visible crosshair therefore reference one camera-centered point instead of allowing the hidden/free mouse cursor to drift independently. The separate first-person mouse pointer overlay has been removed; native modal interfaces still retain normal mouse ownership when they appear above the first-person view.
+
+The renderer also reuses its large depth and pick buffers across frames instead of reallocating them for every camera update. Hover-object bounds are recorded during billboard projection and reused for highlighting, replacing the previous full-frame pixel scan used to rediscover a selected object's screen bounds. These changes are aimed specifically at reducing large-map camera hitching without changing world geometry or native movement/combat authority.
