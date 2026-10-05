@@ -25,7 +25,9 @@
 namespace fallout {
 
 static bool gFirstPersonEnabled = false;
-static int gFirstPersonRotation = 0;
+// 24 presentation headings around the circle (15 degrees each). Native
+// Fallout movement still resolves to the nearest one of its 6 hex directions.
+static int gFirstPersonHeading = 0;
 
 // Pick IDs are written only when a visible scene pixel wins the depth test.
 // Resolve against live map objects before returning; never dereference cached
@@ -109,8 +111,9 @@ void first_person_toggle()
 {
     gFirstPersonEnabled = !gFirstPersonEnabled;
     if (gFirstPersonEnabled && obj_dude != nullptr) {
-        gFirstPersonRotation = ((obj_dude->rotation % ROTATION_COUNT)
+        const int nativeRotation = ((obj_dude->rotation % ROTATION_COUNT)
             + ROTATION_COUNT) % ROTATION_COUNT;
+        gFirstPersonHeading = nativeRotation * 4;
     }
     gFirstPersonPicks.clear();
     gFirstPersonInteractionPicks.clear();
@@ -118,9 +121,17 @@ void first_person_toggle()
 
 // The view heading belongs to presentation, not native animation/pathing.
 // Native movement remains free to rotate the character at every hex step.
+int first_person_heading()
+{
+    return gFirstPersonHeading;
+}
+
 int first_person_rotation()
 {
-    return gFirstPersonRotation;
+    // Round the 24-step presentation heading to the nearest native 60-degree
+    // hex direction. This keeps Fallout pathing/collision authoritative while
+    // allowing the camera to look between hex axes.
+    return ((gFirstPersonHeading + 2) / 4) % ROTATION_COUNT;
 }
 
 void first_person_turn(int steps)
@@ -128,9 +139,11 @@ void first_person_turn(int steps)
     if (!gFirstPersonEnabled) {
         return;
     }
-    gFirstPersonRotation = ((gFirstPersonRotation + steps % ROTATION_COUNT)
-        % ROTATION_COUNT + ROTATION_COUNT) % ROTATION_COUNT;
+    constexpr int kHeadingCount = ROTATION_COUNT * 4;
+    gFirstPersonHeading = ((gFirstPersonHeading + steps % kHeadingCount)
+        % kHeadingCount + kHeadingCount) % kHeadingCount;
     gFirstPersonPicks.clear();
+    gFirstPersonInteractionPicks.clear();
 }
 
 // Input coordinates are desktop/window coordinates, whereas projection uses
@@ -159,8 +172,8 @@ int first_person_target_tile(int screenX, int screenY)
     }
     const double cameraX = (x - width * 0.5) * z / focal;
     constexpr double pi = 3.14159265358979323846;
-    const int rotation = first_person_rotation();
-    const double yaw = -pi / 6.0 + rotation * pi / 3.0;
+    const int heading = first_person_heading();
+    const double yaw = -pi / 6.0 + heading * pi / 12.0;
     const double dx = -std::sin(yaw) * cameraX + std::cos(yaw) * z;
     const double dy = std::cos(yaw) * cameraX + std::sin(yaw) * z;
     int isoX;
@@ -177,7 +190,7 @@ Object* first_person_object_at(int screenX, int screenY, int objectType, bool in
 {
     if (!gFirstPersonEnabled || obj_dude == nullptr || display_win == -1
         || elevation != map_elevation || elevation != gPickElevation
-        || obj_dude->tile != gPickTile || first_person_rotation() != gPickRotation
+        || obj_dude->tile != gPickTile || first_person_heading() != gPickRotation
         || gPickWidth != win_width(display_win) || gPickHeight != win_height(display_win)
         || gFirstPersonPicks.empty() || gFirstPersonInteractionPicks.empty()) {
         return nullptr;
@@ -446,7 +459,7 @@ void first_person_render()
     gPickWidth = width;
     gPickHeight = height;
     gPickTile = obj_dude->tile;
-    gPickRotation = first_person_rotation();
+    gPickRotation = first_person_heading();
     gPickElevation = map_elevation;
     gFirstPersonPicks.assign(static_cast<size_t>(width) * height, { nullptr, -1 });
     gFirstPersonInteractionPicks.assign(
@@ -482,8 +495,8 @@ void first_person_render()
     double playerWorldY;
     tileToWorld(obj_dude->tile, &playerWorldX, &playerWorldY);
 
-    const int rotation = first_person_rotation();
-    const double yaw = -kPi / 6.0 + rotation * (kPi / 3.0);
+    const int heading = first_person_heading();
+    const double yaw = -kPi / 6.0 + heading * (kPi / 12.0);
     const double forwardX = std::cos(yaw);
     const double forwardY = std::sin(yaw);
     const double rightX = -forwardY;
