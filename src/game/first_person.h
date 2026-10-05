@@ -8,6 +8,7 @@ struct Object;
 // Experimental first-person presentation layer. The Fallout simulation remains
 // unchanged; presentation and input picking share the first-person projection.
 bool first_person_is_enabled();
+int first_person_window();
 void first_person_toggle();
 void first_person_render();
 // Camera heading is independent of native character facing during pathing.
