@@ -1,8 +1,6 @@
 // Standalone regression tests; no Fallout data or SDL required.
 #include "game/first_person_wall.h"
-
 #include <cassert>
-#include <cmath>
 #include <iostream>
 
 using namespace fallout;
@@ -13,83 +11,100 @@ static void world(int tile, double* x, double* y)
     *y = tile / 200 - (tile % 200 & 1) * 0.5;
 }
 
-static bool close(double a, double b)
+static bool close(double a, double b) { return std::abs(a - b) < 1e-10; }
+
+static std::vector<FirstPersonWallSegment> segments(int tile, unsigned int flags, int rotation = 0)
 {
-    return std::abs(a - b) < 1e-10;
+    double x, y;
+    world(tile, &x, &y);
+    return first_person_wall_segments(tile, flags, rotation, x, y);
 }
 
-static std::vector<FirstPersonWallSegment> segments(int tile, FirstPersonWallType type)
+static bool endpoint_matches(const FirstPersonWallSegment& a,
+    const FirstPersonWallSegment& b)
 {
-    double x;
-    double y;
-    world(tile, &x, &y);
-    return first_person_wall_segments(tile, type, x, y);
+    const double pointsA[2][2] = { { a.ax, a.ay }, { a.bx, a.by } };
+    const double pointsB[2][2] = { { b.ax, b.ay }, { b.bx, b.by } };
+    for (const auto& pa : pointsA) {
+        for (const auto& pb : pointsB) {
+            if (close(pa[0], pb[0]) && close(pa[1], pb[1])) {
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 int main()
 {
-    // Low action bits must not change the wall-light classification.
-    assert(first_person_wall_type(0x00000000u) == FirstPersonWallType::NorthSouth);
-    assert(first_person_wall_type(0x00002000u) == FirstPersonWallType::NorthSouth);
-    assert(first_person_wall_type(0x08000000u) == FirstPersonWallType::EastWest);
-    assert(first_person_wall_type(0x08002000u) == FirstPersonWallType::EastWest);
-    assert(first_person_wall_type(0x10000000u) == FirstPersonWallType::NorthCorner);
-    assert(first_person_wall_type(0x20000000u) == FirstPersonWallType::SouthCorner);
-    assert(first_person_wall_type(0x40000000u) == FirstPersonWallType::EastCorner);
-    assert(first_person_wall_type(0x80000000u) == FirstPersonWallType::WestCorner);
+    constexpr unsigned int ns = 0x00000000u;
+    constexpr unsigned int ew = 0x08000000u;
+    constexpr unsigned int northCorner = 0x10000000u;
+    constexpr unsigned int southCorner = 0x20000000u;
+    constexpr unsigned int eastCorner = 0x40000000u;
+    constexpr unsigned int westCorner = 0x80000000u;
 
-    // North/south pieces follow the established world Y basis and meet exactly.
-    {
-        const int aTile = 20100;
-        const int bTile = 20300;
-        const auto a = segments(aTile, FirstPersonWallType::NorthSouth);
-        const auto b = segments(bTile, FirstPersonWallType::NorthSouth);
-        assert(a.size() == 1 && b.size() == 1);
-        assert(close(a[0].ax, a[0].bx));
-        assert(close(b[0].ax, b[0].bx));
-        assert(close(a[0].bx, b[0].ax));
-        assert(close(a[0].by, b[0].ay));
-    }
+    // Low action bits are independent of the high wall-light geometry class.
+    assert(first_person_wall_kind(0x00002000u) == FIRST_PERSON_WALL_NORTH_SOUTH);
+    assert(first_person_wall_kind(0x08002000u) == FIRST_PERSON_WALL_EAST_WEST);
+    assert(first_person_wall_kind(0x08002800u) == FIRST_PERSON_WALL_EAST_WEST);
 
-    // Consecutive east/west wall objects live on alternating hex-center Y
-    // values. The parity correction must put both pieces on one straight line.
-    {
-        const int aTile = 20100;
-        const int bTile = 20101;
-        const auto a = segments(aTile, FirstPersonWallType::EastWest);
-        const auto b = segments(bTile, FirstPersonWallType::EastWest);
+    // East/West walls form one straight line despite alternating hex-center Y.
+    for (int tile : { 20100, 20101 }) {
+        const auto a = segments(tile, ew);
+        const auto b = segments(tile + 1, ew);
         assert(a.size() == 1 && b.size() == 1);
         assert(close(a[0].ay, a[0].by));
         assert(close(b[0].ay, b[0].by));
         assert(close(a[0].ay, b[0].ay));
-        assert(close(a[0].ax, b[0].bx));
+        assert(endpoint_matches(a[0], b[0]));
     }
 
-    // Corner classes emit exactly two perpendicular half-segments and preserve
-    // the direction pattern observed in the Vault wall-map snapshot.
+    // North/South walls on consecutive rows meet exactly.
     {
         const int tile = 20100;
-        const auto north = segments(tile, FirstPersonWallType::NorthCorner);
-        const auto south = segments(tile, FirstPersonWallType::SouthCorner);
-        const auto east = segments(tile, FirstPersonWallType::EastCorner);
-        const auto west = segments(tile, FirstPersonWallType::WestCorner);
-        for (const auto* result : { &north, &south, &east, &west }) {
-            assert(result->size() == 2);
-            const auto& h = (*result)[0];
-            const auto& v = (*result)[1];
-            assert(close(h.ay, h.by));
-            assert(close(v.ax, v.bx));
-            assert(close(h.ax, v.ax));
-            assert(close(h.ay, v.ay));
-        }
-        assert(north[0].bx < north[0].ax && north[1].by > north[1].ay);
-        assert(south[0].bx > south[0].ax && south[1].by < south[1].ay);
-        assert(east[0].bx < east[0].ax && east[1].by < east[1].ay);
-        assert(west[0].bx > west[0].ax && west[1].by > west[1].ay);
+        const auto a = segments(tile, ns);
+        const auto b = segments(tile + 200, ns);
+        assert(a.size() == 1 && b.size() == 1);
+        assert(close(a[0].ax, a[0].bx));
+        assert(close(b[0].ax, b[0].bx));
+        assert(endpoint_matches(a[0], b[0]));
     }
 
-    // A wall with its center behind the near plane can still have a visible
-    // endpoint. Clipping must retain the correct fraction of the source art.
+    // Corner classes use the arm directions seen in the Vault 13 topology:
+    // N = right+down, S = left+up, E = right+up, W = left+down.
+    struct CornerCase {
+        unsigned int flags;
+        int horizontalNeighbor;
+        int verticalNeighbor;
+    };
+    const int tile = 20100;
+    for (const CornerCase& c : {
+             CornerCase { northCorner, tile + 1, tile + 200 },
+             CornerCase { southCorner, tile - 1, tile - 200 },
+             CornerCase { eastCorner, tile + 1, tile - 200 },
+             CornerCase { westCorner, tile - 1, tile + 200 },
+         }) {
+        const auto corner = segments(tile, c.flags);
+        const auto horizontal = segments(c.horizontalNeighbor, ew);
+        const auto vertical = segments(c.verticalNeighbor, ns);
+        assert(corner.size() == 2);
+        assert(endpoint_matches(corner[0], horizontal[0])
+            || endpoint_matches(corner[1], horizontal[0]));
+        assert(endpoint_matches(corner[0], vertical[0])
+            || endpoint_matches(corner[1], vertical[0]));
+    }
+
+    // Unknown/custom types retain deterministic fallback geometry.
+    {
+        const auto fallback = segments(tile, 0x18000000u, 2);
+        assert(fallback.size() == 1);
+        assert(close(std::hypot(fallback[0].bx - fallback[0].ax,
+                         fallback[0].by - fallback[0].ay),
+            1.0));
+    }
+
+    // Near-plane clipping must preserve the correct texture fraction.
     double ax = 0, az = 0, bx = 2, bz = 2, u0 = 0, u1 = 1;
     assert(first_person_clip_wall(ax, az, bx, bz, u0, u1, 0.5));
     assert(close(ax, 0.5) && close(az, 0.5) && close(u0, 0.25));
@@ -101,5 +116,5 @@ int main()
     az = bz = 0.5;
     assert(first_person_clip_wall(ax, az, bx, bz, u0, u1, 0.5));
 
-    std::cout << "Wall prototype geometry and near-plane regression tests passed\n";
+    std::cout << "Wall type lattice and near-plane regression tests passed\n";
 }
