@@ -608,3 +608,10 @@ native hex targeting stay aligned.
 The right stick must be exposed by Steam Input as a normal joystick/gamepad
 stick. It should not also emit mouse movement; the right trackpad remains the
 dedicated Fallout mouse cursor.
+
+
+Vertical look now uses asymmetric pitch limits: about +18 degrees upward and
+-40 degrees downward. Fallout maps do not provide meaningful ceiling geometry,
+so the tighter upward cap avoids exposing mostly empty/black space, while the
+deeper downward range lets the player inspect essentially the full ground plane
+and use the trackpad for precise nearby hex/object targeting.
