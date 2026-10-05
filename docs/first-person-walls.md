@@ -559,3 +559,17 @@ This marks the generic picking/interaction/combat-target selection layer as a
 usable foundation. Remaining combat work is primarily feedback/presentation
 (AP, attack state, selected target, weapon state) rather than replacing native
 combat semantics.
+
+
+## First-person combat presentation
+
+The viewport now mirrors native Fallout combat state instead of replacing it.
+A compact top-left status panel shows the current mouse mode at all times. In
+combat/attack mode it additionally shows current AP, attack AP cost, ammo for
+weapons that use it, and the hovered critter.
+
+For a hovered combat target the panel reports either native hit chance or the
+same pre-attack failure condition used by Fallout's combat code (no ammo, out
+of range, not enough AP, blocked aim, dead target, or crippled-arm weapon
+restrictions). The underlying attack still goes through Fallout's normal combat
+functions; this is presentation only.
