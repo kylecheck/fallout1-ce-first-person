@@ -911,7 +911,6 @@ void first_person_render()
     const int sky = colorTable[0];
     const int ground = colorTable[10570];
     const int gridColor = colorTable[992];
-    const int crosshairColor = colorTable[31744];
 
     const int horizon = first_person_horizon(width, height);
     buf_fill(buffer, width, horizon, width, sky);
