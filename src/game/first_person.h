@@ -12,6 +12,8 @@ int first_person_window();
 void first_person_toggle();
 void first_person_update();
 void first_person_cycle_mode();
+void first_person_suspend_overlay();
+void first_person_resume_overlay();
 bool first_person_controller_move_active();
 void first_person_render();
 // Camera heading is independent of native character facing during pathing.
