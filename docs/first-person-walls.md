@@ -1203,3 +1203,30 @@ a bad header points at the previous block.
 g++ -std=c++17 -Wall -Wextra -Werror -Wno-sign-compare -Wno-unused-parameter -ffunction-sections -fdata-sections -Isrc $(sdl2-config --cflags) tests/first_person_heap_check_test.cc -Wl,--gc-sections -o /tmp/fp-heap-check-test
 /tmp/fp-heap-check-test
 ```
+
+
+### Cursor pick/menu frames below the native map area
+
+The second heap-check run failed at `bk-gmouse` with the footer of the locked
+`blank.frm` block overwritten; the previous block was `ACTTOHIT.FRM`. Both are
+3D-cursor frames that `gmouse` locks at start-up next to `ACTPICK.FRM`.
+
+`gmouse_3d_build_pick_frame` and `gmouse_3d_build_menu_frame` move the arrow
+down when the cursor nears the bottom of the map: `shift = y + itemHeight + 1 -
+height`, where `height` excludes the 100-pixel interface bar. The native map
+window keeps `y` above that bar. The first-person window covers the whole
+screen, so the hidden mouse can sit in that band while `gmouse_bk_process`
+builds the hover frame. On a 1280x800 screen the shift reached about 140 rows
+of the 69x62 `ACTPICK.FRM`, so the 29x23 arrow was copied up to ~9.7 KB past
+the frame. Its 69-byte row stride skips some block guards and lands on others.
+
+Both builders now limit the shift so the arrow stays inside its frame. Native
+positions that already fit are unchanged; the native edge row, where the shift
+was one row too large, is now in bounds too. The regression test runs the real
+builders with Fallout 1's frame sizes for every row of an 800-pixel screen and
+checks a guard region after each frame; the unmodified builders fail it.
+
+```sh
+g++ -std=c++17 -Wall -Wextra -Werror -Wno-unused-parameter -Wno-sign-compare -Wno-unused-but-set-variable -ffunction-sections -fdata-sections -Isrc $(sdl2-config --cflags) tests/gmouse_cursor_frame_test.cc -Wl,--gc-sections -o /tmp/gmouse-frame-test
+/tmp/gmouse-frame-test
+```

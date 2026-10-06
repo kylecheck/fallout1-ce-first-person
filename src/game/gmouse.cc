@@ -1,6 +1,7 @@
 #include "game/gmouse.h"
 
 #include <assert.h>
+#include <algorithm>
 #include <climits>
 #include <stdio.h>
 #include <string.h>
@@ -1801,7 +1802,10 @@ int gmouse_3d_build_pick_frame(int x, int y, int menuItem, int width, int height
 
     int maxX = x + menuItemFrmWidth + arrowFrmWidth - 1;
     int maxY = y + menuItemFrmHeight - 1;
-    int shiftY = maxY - height + 2;
+    // Keep the shifted arrow inside the frame. The native map area bounds y,
+    // but a first-person view also covers the interface bar's screen band.
+    int shiftY = std::min(maxY - height + 2,
+        std::max(0, gmouse_3d_pick_frame_height - arrowFrmHeight));
 
     if (maxX < width) {
         menuItemFrmDest += arrowFrmWidth;
@@ -1904,7 +1908,9 @@ int gmouse_3d_build_menu_frame(int x, int y, const int* menuItems, int menuItems
     gmouse_3d_menu_frame->yOffsets[0] = gmouse_3d_menu_frame_height - 1;
 
     int v60 = y + menuItemsLength * menuItemHeight - 1;
-    int v24 = v60 - height + 2;
+    // Keep the shifted arrow inside the frame, as in the pick frame.
+    int v24 = std::min(v60 - height + 2,
+        std::max(0, gmouse_3d_menu_frame_height - arrowHeight));
     unsigned char* v22 = gmouse_3d_menu_frame_data;
     unsigned char* v58 = v22;
 
