@@ -130,7 +130,7 @@ static FirstPersonWeaponPose first_person_weapon_pose(int hitMode)
         }
     }
 
-    if (gmouse_3d_get_mode() == GAME_MOUSE_MODE_CROSSHAIR) {
+    if (first_person_mode() == GAME_MOUSE_MODE_CROSSHAIR) {
         return FirstPersonWeaponPose::Ready;
     }
 
@@ -138,6 +138,7 @@ static FirstPersonWeaponPose first_person_weapon_pose(int hitMode)
 }
 
 static bool gFirstPersonEnabled = false;
+static int gFirstPersonMode = GAME_MOUSE_MODE_MOVE;
 static constexpr double kFirstPersonEyeHeight = 0.74;
 static int gFirstPersonWindow = -1;
 static bool gFirstPersonRestoreInterface = false;
@@ -276,6 +277,8 @@ void first_person_toggle()
             win_show(gFirstPersonWindow);
         }
 
+        gFirstPersonMode = GAME_MOUSE_MODE_MOVE;
+
         if (obj_dude != nullptr) {
             const int nativeRotation = ((obj_dude->rotation % ROTATION_COUNT)
                 + ROTATION_COUNT) % ROTATION_COUNT;
@@ -362,24 +365,35 @@ void first_person_cycle_mode()
         return;
     }
 
-    int nextMode = GAME_MOUSE_MODE_MOVE;
-    switch (gmouse_3d_get_mode()) {
+    switch (gFirstPersonMode) {
     case GAME_MOUSE_MODE_MOVE:
-        nextMode = GAME_MOUSE_MODE_ARROW;
+        gFirstPersonMode = GAME_MOUSE_MODE_ARROW;
         break;
     case GAME_MOUSE_MODE_ARROW:
-        nextMode = GAME_MOUSE_MODE_CROSSHAIR;
+        gFirstPersonMode = GAME_MOUSE_MODE_CROSSHAIR;
         break;
     case GAME_MOUSE_MODE_CROSSHAIR:
     default:
-        nextMode = GAME_MOUSE_MODE_MOVE;
+        gFirstPersonMode = GAME_MOUSE_MODE_MOVE;
         break;
     }
 
-    // Fallout's stock toggle deliberately skips attack mode outside combat.
-    // First person owns its world-mode cycle, so expose attack mode explicitly.
-    // Native combat still starts only when an actual target is attacked.
-    gmouse_3d_set_mode(nextMode);
+    // Do not ask Fallout's legacy mouse-mode machine to represent the
+    // first-person state. Outside combat it actively rejects CROSSHAIR and
+    // rewrites modes based on the hidden map cursor. First person owns this
+    // three-state cycle and routes clicks itself.
+    if (gFirstPersonMode == GAME_MOUSE_MODE_ARROW) {
+        gmouse_3d_set_mode(GAME_MOUSE_MODE_ARROW);
+    } else {
+        gmouse_3d_set_mode(GAME_MOUSE_MODE_MOVE);
+    }
+
+    first_person_render();
+}
+
+int first_person_mode()
+{
+    return gFirstPersonEnabled ? gFirstPersonMode : gmouse_3d_get_mode();
 }
 
 void first_person_suspend_overlay()
@@ -2190,7 +2204,7 @@ void first_person_render()
 
     Object* firstPersonHoverObject = nullptr;
     const bool firstPersonCombatAim =
-        gmouse_3d_get_mode() == GAME_MOUSE_MODE_CROSSHAIR;
+        first_person_mode() == GAME_MOUSE_MODE_CROSSHAIR;
     const int hoverX = width / 2;
     const int hoverY = height / 2;
 
@@ -2257,7 +2271,7 @@ void first_person_render()
 
             if (maxPickX >= minPickX && maxPickY >= minPickY) {
                 const bool attackTarget =
-                    gmouse_3d_get_mode() == GAME_MOUSE_MODE_CROSSHAIR
+                    first_person_mode() == GAME_MOUSE_MODE_CROSSHAIR
                     && FID_TYPE(hoverPick.object->fid) == OBJ_TYPE_CRITTER
                     && hoverPick.object != obj_dude;
                 const int highlightColor =
