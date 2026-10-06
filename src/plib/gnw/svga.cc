@@ -1,5 +1,7 @@
 #include "plib/gnw/svga.h"
 
+#include "game/first_person_gpu.h"
+
 #include "plib/gnw/gnw.h"
 #include "plib/gnw/grbuf.h"
 #include "plib/gnw/mouse.h"
@@ -230,6 +232,7 @@ void renderPresent()
     SDL_UpdateTexture(gSdlTexture, NULL, gSdlTextureSurface->pixels, gSdlTextureSurface->pitch);
     SDL_RenderClear(gSdlRenderer);
     SDL_RenderCopy(gSdlRenderer, gSdlTexture, NULL, NULL);
+    first_person_gpu_present();
     SDL_RenderPresent(gSdlRenderer);
 }
 
