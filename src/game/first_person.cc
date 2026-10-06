@@ -2,6 +2,7 @@
 #include "game/gamepad.h"
 #include "game/first_person_gpu.h"
 #include "game/first_person_heap_check.h"
+#include "game/first_person_hud.h"
 #include "game/first_person_world_gpu.h"
 #include "game/first_person_projection.h"
 #include "game/first_person_frame.h"
@@ -587,6 +588,22 @@ void first_person_update()
         first_person_render();
     }
     gFirstPersonController = gamepad_controller();
+
+    // Redraw when native code changes a mirrored interface-bar piece, such as
+    // a new monitor message while the camera is still.
+    if (first_person_overlay_visible() && interfaceWindow != -1) {
+        const unsigned char* bar = win_get_buf(interfaceWindow);
+        if (bar != nullptr) {
+            static std::uint64_t lastHud = 0;
+            const std::uint64_t hud = first_person_hud_signature(bar,
+                win_width(interfaceWindow), win_height(interfaceWindow));
+            if (hud != lastHud) {
+                lastHud = hud;
+                first_person_render();
+            }
+        }
+    }
+
     if (!first_person_world_input_allowed()) {
         gFirstPersonControllerTicks = 0;
         return;
@@ -2859,94 +2876,19 @@ static void first_person_render_now()
         }
     }
 
-    // Persistent first-person HUD. Keep it intentionally compact: mirror
-    // native character/weapon state without replacing Fallout's systems.
-    {
-        const int oldFont = text_curr();
-        text_font(101);
-        const int lineHeight = text_height();
-        const int padding = 4;
-        const int hudColor = colorTable[992];
-
-        char leftHud[64];
-        const int hp = critter_get_hits(obj_dude);
-        const int maxHp = stat_level(obj_dude, STAT_MAXIMUM_HIT_POINTS);
-        std::snprintf(leftHud, sizeof(leftHud), "HP %d/%d", hp, maxHp);
-
-        int hitMode = 0;
-        bool aiming = false;
-        Object* weapon = nullptr;
-        int ammo = -1;
-        int ammoMax = -1;
-        if (intface_get_attack(&hitMode, &aiming) == 0) {
-            weapon = item_hit_with(obj_dude, hitMode);
-            if (weapon != nullptr) {
-                ammoMax = item_w_max_ammo(weapon);
-                if (ammoMax > 0) {
-                    ammo = item_w_curr_ammo(weapon);
-                }
+    // Original interface-bar pieces: the message monitor, HP/AC counters with
+    // the ammo bar, and the AP lights. Native code keeps drawing these into
+    // the hidden bar, so copying them shows live native state.
+    if (interfaceWindow != -1) {
+        const unsigned char* bar = win_get_buf(interfaceWindow);
+        const int barWidth = win_width(interfaceWindow);
+        const int barHeight = win_height(interfaceWindow);
+        if (bar != nullptr && barWidth > 0 && barHeight > 0) {
+            const FirstPersonHudLayout hud = first_person_hud_layout(width, height);
+            for (const FirstPersonHudPlacement& piece : { hud.monitor, hud.counters, hud.actionPoints }) {
+                first_person_hud_blit(bar, barWidth, barHeight, piece, hud.scale, buffer, width, height);
             }
         }
-
-        char rightHud[96];
-        if (ammoMax > 0) {
-            std::snprintf(
-                rightHud,
-                sizeof(rightHud),
-                isInCombat() ? "AP %d  AMMO %d/%d" : "AMMO %d/%d",
-                isInCombat() ? obj_dude->data.critter.combat.ap : ammo,
-                isInCombat() ? ammo : ammoMax,
-                isInCombat() ? ammoMax : 0);
-            if (!isInCombat()) {
-                std::snprintf(rightHud, sizeof(rightHud), "AMMO %d/%d", ammo, ammoMax);
-            }
-        } else if (isInCombat()) {
-            std::snprintf(
-                rightHud,
-                sizeof(rightHud),
-                "AP %d",
-                obj_dude->data.critter.combat.ap);
-        } else {
-            rightHud[0] = '\0';
-        }
-
-        const int leftWidth = text_width(leftHud) + padding * 2;
-        const int panelHeight = lineHeight + padding * 2;
-        if (leftWidth > 0 && panelHeight > 0) {
-            const int top = std::max(0, height - panelHeight - 6);
-            buf_fill(
-                buffer + top * width,
-                std::min(leftWidth, width),
-                panelHeight,
-                width,
-                colorTable[0]);
-            text_to_buf(
-                buffer + (top + padding) * width + padding,
-                leftHud,
-                std::max(0, leftWidth - padding * 2),
-                width,
-                hudColor);
-        }
-
-        if (rightHud[0] != '\0') {
-            const int rightWidth = text_width(rightHud) + padding * 2;
-            const int left = std::max(0, width - rightWidth);
-            const int top = std::max(0, height - panelHeight - 6);
-            buf_fill(
-                buffer + top * width + left,
-                std::min(rightWidth, width - left),
-                panelHeight,
-                width,
-                colorTable[0]);
-            text_to_buf(
-                buffer + (top + padding) * width + left + padding,
-                rightHud,
-                std::max(0, rightWidth - padding * 2),
-                width,
-                hudColor);
-        }
-
-        text_font(oldFont);
     }
 
     // First-person mode/combat presentation. Native Fallout remains the
@@ -3185,7 +3127,9 @@ static void first_person_render_now()
         text_font(oldFont);
     }
 
-    {
+    // Controller status is diagnostic: show it only while recording input.
+    static const bool showControllerStatus = std::getenv("FALLOUT_FP_INPUT_LOG") != nullptr;
+    if (showControllerStatus) {
         const int oldFont = text_curr();
         text_font(101);
         const int diagnosticY = text_height() * 4 + 24;
@@ -3198,13 +3142,15 @@ static void first_person_render_now()
         const int oldFont = text_curr();
         text_font(101);
         const int lineHeight = text_height();
-        const int hintY = std::max(0, height - lineHeight * 3 - 28);
+        // Top-right: the bottom-left corner belongs to the message monitor.
+        const int hintY = 4;
         const int hintWidth = std::min(width, 570);
-        buf_fill(buffer + hintY * width, hintWidth, lineHeight * 2 + 4, width, colorTable[0]);
-        text_to_buf(buffer + (hintY + 2) * width + 4,
+        const int hintX = width - hintWidth;
+        buf_fill(buffer + hintY * width + hintX, hintWidth, lineHeight * 2 + 4, width, colorTable[0]);
+        text_to_buf(buffer + (hintY + 2) * width + hintX + 4,
             "A: interact  RT: action  LT: mode  X: inventory  Y: Pip-Boy",
             hintWidth - 8, width, colorTable[992]);
-        text_to_buf(buffer + (hintY + lineHeight + 2) * width + 4,
+        text_to_buf(buffer + (hintY + lineHeight + 2) * width + hintX + 4,
             gamepad_has_paddles() ? "L4/View: actions  R4: reload  L5: end turn  R5/R3: view"
                 : "View: actions/reload/end turn  R3: view  LB: hand  RB: attack type",
             hintWidth - 8, width, colorTable[992]);

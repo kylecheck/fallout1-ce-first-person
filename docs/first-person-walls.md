@@ -1230,3 +1230,27 @@ checks a guard region after each frame; the unmodified builders fail it.
 g++ -std=c++17 -Wall -Wextra -Werror -Wno-unused-parameter -Wno-sign-compare -Wno-unused-but-set-variable -ffunction-sections -fdata-sections -Isrc $(sdl2-config --cflags) tests/gmouse_cursor_frame_test.cc -Wl,--gc-sections -o /tmp/gmouse-frame-test
 /tmp/gmouse-frame-test
 ```
+
+
+## First-person HUD from the original interface bar
+
+The text HP/weapon and AP/ammo panels are replaced by pieces of the original
+640x100 interface bar: the message monitor (0,0 212x97), the HP/AC counters
+with the native ammo bar at x=463 (462,22 58x75) and the AP lights (306,8
+106x14). The bar stays hidden in first person, but native code keeps drawing
+counters, lights, the ammo bar and monitor messages into its buffer, so the
+copies show live native state. No counter, light or message logic is duplicated.
+
+Pieces are copied with whole-number nearest scaling: 2x at 1280x800, so the
+art maps one-to-one onto the Deck screen. The monitor sits bottom-left, the
+counters beside it with their native vertical alignment, and the AP lights
+bottom-centre, moved right if they would overlap the counters.
+`first_person_update` fingerprints the mirrored regions and requests a redraw
+when one changes, so a new message or HP change appears while the camera is
+still. Controller hints moved to the top-right. The controller status line now
+shows only while `FALLOUT_FP_INPUT_LOG` is set.
+
+```sh
+g++ -std=c++17 -Wall -Wextra -Werror -Isrc tests/first_person_hud_test.cc -o /tmp/fp-hud-test
+/tmp/fp-hud-test
+```
