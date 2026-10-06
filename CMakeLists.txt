@@ -80,6 +80,8 @@ target_sources(${EXECUTABLE_NAME} PUBLIC
     "src/game/fontmgr.h"
     "src/game/first_person.cc"
     "src/game/first_person.h"
+    "src/game/first_person_gpu.cc"
+    "src/game/first_person_gpu.h"
     "src/game/first_person_wall.h"
     "src/game/first_person_doorway.h"
     "src/game/first_person_material.h"
