@@ -974,7 +974,26 @@ void gmouse_handle_event(int mouseX, int mouseY, int mouseState)
         if (gmouse_3d_current_mode == GAME_MOUSE_MODE_CROSSHAIR) {
             Object* target = object_under_mouse(OBJ_TYPE_CRITTER, false, map_elevation);
             if (target != NULL) {
-                combat_attack_this(target);
+                if (first_person_is_enabled() && !isInCombat()) {
+                    // Native combat_attack_this refuses to run before the
+                    // player's combat-turn bit is active. First-person attack
+                    // mode should still be able to initiate combat from the
+                    // center reticle, so enter combat with this live target as
+                    // the initial defender using Fallout's normal combat setup.
+                    STRUCT_664980 attack {};
+                    attack.attacker = obj_dude;
+                    attack.defender = target;
+                    attack.actionPointsBonus = 0;
+                    attack.accuracyBonus = 0;
+                    attack.damageBonus = 0;
+                    attack.minDamage = 0;
+                    attack.maxDamage = INT_MAX;
+                    attack.field_1C = 0;
+                    combat(&attack);
+                } else {
+                    combat_attack_this(target);
+                }
+
                 gmouse_3d_hover_test = true;
                 gmouse_3d_last_mouse_y = mouseY;
                 gmouse_3d_last_mouse_x = mouseX;
