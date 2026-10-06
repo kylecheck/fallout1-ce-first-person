@@ -28,6 +28,8 @@ Continue the existing implementation. Do not start over.
     `win_get_top_win` includes hidden windows. Presentation visibility is
     separate from combat/input permission.
   - c59bcd3: weapon sprite mirrored horizontally, same placement/animation
+  - 908e083: native cursor pick/menu arrows clamped inside their art frames
+    (fixed the looting crash; see below)
 - Explain findings before any substantial architectural change, and wait for
   approval.
 
@@ -87,41 +89,38 @@ Afterwards, read the logs and any crash report the user saves in the repo root.
 - Diagnostic-only code must be gated behind an env var and off by default.
 - Push after each verified commit unless told otherwise.
 
-## Current blocking bug: crash when looting a body
+## Resolved: crash when looting a body (908e083)
 
-Main-thread stack:
+Looting crashed in `heap_build_free_list` / `heap_find_free_block` under
+`inven_init <- loot_container`. That was only where the damage was detected.
 
-```
-heap_build_free_list <- heap_find_free_block <- heap_allocate <- cache_add
-<- cache_lock <- art_ptr_lock <- inven_init <- loot_container
-<- scripts_check_state <- main_game_loop
-```
+Cause: `gmouse_bk_process` keeps building the native 3D-cursor hover frames
+while first person is on, using the hidden mouse position. The first-person
+window covers the whole screen, so the mouse can sit in the bottom 100 px band
+that the native interface bar normally blocks. `gmouse_3d_build_pick_frame`
+(and `_menu_frame`) then shifted the arrow far below the 69x62 `ACTPICK.FRM`
+and copied it over neighbouring art-cache blocks. Both builders now clamp the
+shift. Confirmed on device: a long heap-checked run and a normal run, with
+kills and looting in the Vault and at a raider camp.
 
-The input log ends right after RT dispatched RETICLE_ACTION. Looting runs as a
-deferred script request on the next tick. Opening native inventory from the
-first-person action menu works, so `inven_init` itself is not inherently broken.
+Lessons for this codebase:
+- First person widens where native code receives the mouse. Native routines
+  that assume the map area (y above the interface bar) can overrun buffers.
+  Check callers that pass `scr_size ... - 99/100` heights.
+- Native code writes into locked art frames it owns (`gmouse_3d_*_frame_data`).
+  An overrun there corrupts the art-cache heap and surfaces much later.
+- The first-person raster paths and art lock/unlock pairs were audited and
+  found clean.
 
-Working theory (unproven):
-- `heap_build_free_list` walks every art-cache block header, and it only runs
-  under allocation pressure.
-- A header corrupted earlier stays latent until the loot UI loads many FRMs at
-  once. The crash site is a detection point, not the cause.
-- Do not assume the corpse interaction itself is the culprit.
-
-Suspects, in priority order:
-1. Out-of-bounds writes in first-person software raster paths (depth buffer,
-   pick buffer, floor spans, wall columns, guides, reticle, outlines).
-   c36fb41 and 153ca65 already fixed this bug class twice.
-2. In-place writes into cached art pixel data (weapon mirror, GPU palette
-   remap, wall rectification). These must only write to private copies.
-3. Unbalanced `art_ptr_lock`/`art_ptr_unlock` calls (double unlock can free a
-   block that is still in use).
-
-Planned diagnostics (env-gated, off by default):
-- `FALLOUT_FP_HEAP_CHECK=1`: validate the art-cache heap at labelled checkpoints
-  (after each FP frame, split GPU vs software path; after each FP input action;
-  around the weapon draw; on FP toggle). Log the first failing label and frame
-  number to the input log, then abort.
-- Guard pages: a PROT_NONE page after FP-owned software buffers, so the first
-  overrun faults at the culprit line.
-- Audit every art lock/unlock pair and every write through an art frame pointer.
+Diagnostics kept (off by default):
+- `FALLOUT_FP_HEAP_CHECK=1` validates the art-cache heap at labelled
+  checkpoints: FP frames, weapon draw, FP input, toggle, modal scopes,
+  loot/inventory entry, each main-loop stage and each background process.
+  The first failure prints `HEAP_CHECK_FAILED` with the label, frame, reason
+  and the art owning the damaged block and the block before it, then aborts.
+- `run-heapcheck.sh` (local, uncommitted) launches with the heap check and the
+  input log. Pasting multi-line `export` commands into Konsole proved
+  unreliable; prefer a script or one-line commands.
+- Tests: `tests/first_person_heap_check_test.cc`,
+  `tests/gmouse_cursor_frame_test.cc` (compile flags in
+  `docs/first-person-walls.md`).
