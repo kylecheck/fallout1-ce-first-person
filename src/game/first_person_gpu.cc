@@ -204,7 +204,7 @@ void first_person_gpu_present()
     Uint8 g = 220;
     Uint8 b = 220;
 
-    switch (gmouse_3d_get_mode()) {
+    switch (first_person_mode()) {
     case GAME_MOUSE_MODE_ARROW:
         r = 96;
         g = 255;
