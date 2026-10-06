@@ -1129,3 +1129,39 @@ keys, reset, and SDL timestamp wraparound:
 g++ -std=c++17 -Wall -Wextra -Werror -Isrc $(sdl2-config --cflags) tests/gamepad_keyboard_echo_test.cc -o /tmp/fp-keyboard-echo-test
 /tmp/fp-keyboard-echo-test
 ```
+
+
+### Visible UI ownership and returning to first person
+
+The latest device recording showed R5 turning first person off, immediately
+followed by a persistent `UI` context. Further R5 presses arrived without
+producing toggle commands, before the Steam button was pressed. The legacy
+`win_get_top_win` includes hidden windows, so the hidden first-person overlay
+was still reported as the owner above the native map. The same query allowed
+queued GPU weapon sprites to draw after a native modal hid the overlay.
+
+A new `win_get_top_visible_win` excludes hidden windows. First-person input,
+controller context, and mouse ownership now use this query. The existing query
+keeps its native semantics for other callers. GPU weapon/reticle composition
+uses explicit presentation ownership: enabled view, no modal suspension, no
+action menu, and a visible first-person window at the center. This stays
+separate from player-turn/AP input permission so enemy turns still render.
+
+The diagnostic recording adds `top_window`, `fp`, and `overlay` to changed
+state lines. The existing `focus` value means input readiness (window active
+and keyboard enabled); zero alone does not establish a Steam focus problem.
+
+Tests exercise the actual GNW window stack with hidden overlays and native
+modal windows, production nested modal/presentation state, a Map-context R5
+press through SDL virtual controller input, and a queued indexed weapon sprite
+through an actual SDL renderer. The weapon must disappear while UI owns
+presentation and return afterward. Device testing should cover repeated
+R5 off/on, inventory, Options, Actions-to-native-menu transitions, and Steam
+focus return. No world coordinates or native combat rules are changed.
+
+```sh
+g++ -std=c++17 -ffunction-sections -fdata-sections -Isrc $(sdl2-config --cflags) tests/first_person_window_test.cc -Wl,--gc-sections -o /tmp/fp-window-test
+/tmp/fp-window-test
+g++ -std=c++17 -Wall -Wextra -Werror -Isrc $(sdl2-config --cflags) tests/first_person_gpu_ui_test.cc $(sdl2-config --libs) -o /tmp/fp-gpu-ui-test
+SDL_VIDEODRIVER=dummy /tmp/fp-gpu-ui-test
+```

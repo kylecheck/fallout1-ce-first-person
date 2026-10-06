@@ -92,9 +92,11 @@ static void log_state(GamepadContext current, bool focused)
 {
     char state[256];
     const int id = controller == nullptr ? -1 : SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(controller));
-    std::snprintf(state, sizeof(state), "context=%s focus=%d native=%d device=%d name=%.64s grips=%d",
+    std::snprintf(state, sizeof(state), "context=%s focus=%d native=%d device=%d name=%.64s grips=%d top_window=%d fp=%d overlay=%d",
         context_name(current), focused, nativeEnabled, id,
-        controller == nullptr ? "none" : SDL_GameControllerName(controller), gamepad_has_paddles());
+        controller == nullptr ? "none" : SDL_GameControllerName(controller), gamepad_has_paddles(),
+        win_get_top_visible_win(screenGetWidth() / 2, screenGetHeight() / 2),
+        first_person_is_enabled(), first_person_overlay_visible());
     if (std::strcmp(loggedState, state) != 0) {
         std::snprintf(loggedState, sizeof(loggedState), "%s", state);
         log_input("STATE %s", state);
@@ -175,7 +177,7 @@ void gamepad_mouse_state(int* dx, int* dy, bool* left)
 static GamepadContext context()
 {
     if (first_person_action_menu_active()) return GamepadContext::Actions;
-    const int top = win_get_top_win(screenGetWidth() / 2, screenGetHeight() / 2);
+    const int top = win_get_top_visible_win(screenGetWidth() / 2, screenGetHeight() / 2);
     if (first_person_is_enabled() && top == first_person_window()) {
         return first_person_world_input_allowed() ? GamepadContext::World : GamepadContext::Blocked;
     }

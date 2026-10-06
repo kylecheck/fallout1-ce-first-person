@@ -533,11 +533,17 @@ FirstPersonModalScope::~FirstPersonModalScope()
     if (active_) first_person_resume_overlay();
 }
 
-bool first_person_world_input_allowed()
+bool first_person_overlay_visible()
 {
     return gFirstPersonEnabled && !gFirstPersonOverlaySuspended
+        && !gFirstPersonActionMenuActive && gFirstPersonWindow != -1
+        && win_get_top_visible_win((scr_size.lrx + 1) / 2, (scr_size.lry + 1) / 2) == gFirstPersonWindow;
+}
+
+bool first_person_world_input_allowed()
+{
+    return first_person_overlay_visible()
         && obj_dude != nullptr && intface_is_enabled()
-        && win_get_top_win((scr_size.lrx + 1) / 2, (scr_size.lry + 1) / 2) == gFirstPersonWindow
         && (!isInCombat() || (combat_state & COMBAT_STATE_0x02) != 0);
 }
 

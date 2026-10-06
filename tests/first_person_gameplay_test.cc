@@ -16,7 +16,7 @@ static bool interfaceEnabled = true;
 static int nativeMode = GAME_MOUSE_MODE_MOVE;
 static int hides = 0, shows = 0, moves = 0, submittedAp = 0;
 static int registeredRotation = 0;
-int win_get_top_win(int, int) { return topWindow; }
+int win_get_top_visible_win(int, int) { return topWindow; }
 bool intface_is_enabled() { return interfaceEnabled; }
 void intface_hide() {}
 void win_hide(int) { hides++; }
@@ -46,6 +46,10 @@ int main()
     gFirstPersonWindow = 5;
     player.tile = 20100;
     assert(first_person_world_input_allowed());
+    assert(first_person_overlay_visible());
+    gFirstPersonActionMenuActive = true;
+    assert(!first_person_overlay_visible() && !first_person_world_input_allowed());
+    gFirstPersonActionMenuActive = false;
     first_person_move(3);
     assert(moves == 1 && submittedAp == -1 && registeredRotation == 3);
     combat_state = COMBAT_STATE_0x01 | COMBAT_STATE_0x02;
@@ -60,12 +64,14 @@ int main()
     combat_state = COMBAT_STATE_0x01; // Enemy turn, even with leftover AP.
     first_person_move(1);
     assert(moves == 2 && !first_person_world_input_allowed());
+    assert(first_person_overlay_visible()); // Enemy turn still shows the scene.
     combat_state = COMBAT_STATE_0x02;
     interfaceEnabled = false;
     first_person_move(1);
     assert(moves == 2);
     interfaceEnabled = true;
     topWindow = 9; // Native dialog owns the view.
+    assert(!first_person_overlay_visible());
     first_person_move(1);
     assert(moves == 2);
     topWindow = 5;
@@ -73,6 +79,7 @@ int main()
     {
         FirstPersonModalScope options;
         assert(hides == 1 && gFirstPersonOverlaySuspended);
+        assert(!first_person_overlay_visible());
         {
             FirstPersonModalScope load;
             assert(hides == 1 && gFirstPersonModalDepth == 2);

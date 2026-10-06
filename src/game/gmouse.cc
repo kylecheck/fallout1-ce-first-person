@@ -615,7 +615,7 @@ void gmouse_bk_process()
         gmouse_bk_last_cursor = -1;
     }
 
-    if (win_get_top_win(mouseX, mouseY) != first_person_window()) {
+    if (win_get_top_visible_win(mouseX, mouseY) != first_person_window()) {
         if (gmouse_current_cursor == MOUSE_CURSOR_NONE) {
             gmouse_3d_off();
             gmouse_set_cursor(MOUSE_CURSOR_ARROW);
@@ -1720,7 +1720,7 @@ Object* object_under_mouse(int objectType, bool a2, int elevation)
         const int pickX = viewRect.ulx + rectGetWidth(&viewRect) / 2;
         const int pickY = viewRect.uly + rectGetHeight(&viewRect) / 2;
 
-        if (win_get_top_win(pickX, pickY) != first_person_window()) {
+        if (win_get_top_visible_win(pickX, pickY) != first_person_window()) {
             return nullptr;
         }
         return first_person_object_at(pickX, pickY, objectType, a2, elevation);

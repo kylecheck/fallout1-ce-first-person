@@ -24,6 +24,9 @@ private:
     bool active_;
 };
 bool first_person_world_input_allowed();
+// Presentation ownership excludes native modal UI and the action menu,
+// but remains visible during enemy turns when world input is blocked.
+bool first_person_overlay_visible();
 void first_person_move(int rotation);
 void first_person_action_menu();
 bool first_person_action_menu_active();

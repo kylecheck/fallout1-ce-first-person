@@ -15,11 +15,12 @@ static bool fp = true, menu = false;
 static int top = 5;
 static std::vector<int> commands;
 bool first_person_is_enabled() { return fp; }
+bool first_person_overlay_visible() { return fp && top == 5 && !menu; }
 bool first_person_world_input_allowed() { return fp && top == 5; }
 bool first_person_action_menu_active() { return menu; }
 int first_person_window() { return 5; }
 void first_person_render() {}
-int win_get_top_win(int, int) { return top; }
+int win_get_top_visible_win(int, int) { return top; }
 int screenGetWidth() { return 1280; }
 int screenGetHeight() { return 800; }
 bool intface_is_enabled() { return true; }
@@ -81,6 +82,13 @@ int main(int argc, char** argv)
     echo.key.repeat = 0;
     assert(!gamepad_filter_keyboard_echo(echo)); // Independent Space remains usable.
     SDL_JoystickSetVirtualButton(joy, SDL_CONTROLLER_BUTTON_Y, 0); tick();
+    // Switching off first person must leave Map context, where R5 can turn it
+    // back on. Visible-window ownership is tested against the native stack.
+    fp = false; top = display_win; tick(); commands.clear();
+    SDL_JoystickSetVirtualButton(joy, SDL_CONTROLLER_BUTTON_PADDLE3, 1); tick();
+    assert(commands.size() == 1 && commands.back() == KEY_F11);
+    fp = true; top = 5;
+    SDL_JoystickSetVirtualButton(joy, SDL_CONTROLLER_BUTTON_PADDLE3, 0); tick();
     menu = true; tick(); commands.clear();
     SDL_JoystickSetVirtualButton(joy, SDL_CONTROLLER_BUTTON_DPAD_DOWN, 1); tick();
     assert(commands.back() == KEY_ARROW_DOWN);

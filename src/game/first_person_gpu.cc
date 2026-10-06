@@ -155,7 +155,7 @@ void first_person_gpu_submit_indexed_sprite(
 
 void first_person_gpu_present()
 {
-    if (!first_person_is_enabled()
+    if (!first_person_overlay_visible()
         || gSdlRenderer == nullptr
         || first_person_window() == -1) {
         return;
@@ -164,12 +164,6 @@ void first_person_gpu_present()
     const int width = screenGetWidth();
     const int height = screenGetHeight();
     if (width <= 0 || height <= 0) {
-        return;
-    }
-
-    // Native modal windows retain normal ownership. Only draw the first-person
-    // GPU overlay while the center of the viewport is actually on our window.
-    if (win_get_top_win(width / 2, height / 2) != first_person_window()) {
         return;
     }
 
