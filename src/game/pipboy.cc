@@ -1,3 +1,4 @@
+#include "game/first_person.h"
 #include "game/pipboy.h"
 
 #include <ctype.h>
@@ -531,6 +532,7 @@ static unsigned char stat_flag;
 // 0x486A80
 int pipboy(int intent)
 {
+    FirstPersonModalScope firstPersonModal;
     intent = StartPipboy(intent);
     if (intent == -1) {
         return -1;

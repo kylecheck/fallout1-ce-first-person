@@ -1,3 +1,4 @@
+#include "game/first_person.h"
 #include "game/gdialog.h"
 
 #include <assert.h>
@@ -594,6 +595,7 @@ bool dialog_active()
 // 0x43DE28
 void gdialog_enter(Object* target, int a2)
 {
+    FirstPersonModalScope firstPersonModal;
     gdDialogWentOff = false;
 
     if (isInCombat()) {

@@ -1,3 +1,4 @@
+#include "game/first_person.h"
 #include "game/skilldex.h"
 
 #include <stdio.h>
@@ -116,6 +117,7 @@ static int fontsave;
 // 0x499560
 int skilldex_select()
 {
+    FirstPersonModalScope firstPersonModal;
     if (skilldex_start() == -1) {
         debug_printf("\n ** Error loading skilldex dialog data! **\n");
         return -1;

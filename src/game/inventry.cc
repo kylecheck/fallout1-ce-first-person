@@ -1,3 +1,5 @@
+#include "game/first_person.h"
+#include "game/first_person_heap_check.h"
 #include "game/inventry.h"
 
 #include <assert.h>
@@ -387,6 +389,8 @@ static int inventry_msg_unload()
 // 0x462480
 void handle_inventory()
 {
+    first_person_heap_check("inventory-begin");
+    FirstPersonModalScope firstPersonModal;
     if (isInCombat()) {
         if (combat_whose_turn() != inven_dude) {
             return;
@@ -2281,6 +2285,7 @@ void adjust_fid()
 // 0x464F00
 void use_inventory_on(Object* a1)
 {
+    FirstPersonModalScope firstPersonModal;
     if (inven_init() == -1) {
         return;
     }
@@ -3606,6 +3611,8 @@ void inven_action_cursor(int keyCode, int inventoryWindowType)
 // 0x466B10
 int loot_container(Object* a1, Object* a2)
 {
+    first_person_heap_check("loot-container-begin");
+    FirstPersonModalScope firstPersonModal;
     // 0x46E708
     static const int arrowFrmIds[INVENTORY_ARROW_FRM_COUNT] = {
         122, // left arrow up

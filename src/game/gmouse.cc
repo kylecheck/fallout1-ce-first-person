@@ -1,6 +1,8 @@
 #include "game/gmouse.h"
 
 #include <assert.h>
+#include <algorithm>
+#include <climits>
 #include <stdio.h>
 #include <string.h>
 
@@ -8,6 +10,8 @@
 #include "game/art.h"
 #include "game/combat.h"
 #include "game/critter.h"
+#include "game/first_person.h"
+#include "game/first_person_heap_check.h"
 #include "game/game.h"
 #include "game/gconfig.h"
 #include "game/gsound.h"
@@ -476,6 +480,9 @@ int gmouse_is_scrolling()
 // 0x443274
 void gmouse_bk_process()
 {
+    first_person_update();
+    first_person_heap_check("fp-update");
+
     // 0x595214
     static Object* last_object;
 
@@ -493,7 +500,7 @@ void gmouse_bk_process()
         mouse_info();
 
         // NOTE: Uninline.
-        if (gmouse_scrolling_is_enabled()) {
+        if (!first_person_is_enabled() && gmouse_scrolling_is_enabled()) {
             mouse_get_position(&mouseX, &mouseY);
             int oldMouseCursor = gmouse_current_cursor;
 
@@ -536,7 +543,7 @@ void gmouse_bk_process()
 
     if (!gmouse_enabled) {
         // NOTE: Uninline.
-        if (gmouse_scrolling_is_enabled()) {
+        if (!first_person_is_enabled() && gmouse_scrolling_is_enabled()) {
             mouse_get_position(&mouseX, &mouseY);
             int oldMouseCursor = gmouse_current_cursor;
 
@@ -579,7 +586,8 @@ void gmouse_bk_process()
     mouse_get_position(&mouseX, &mouseY);
 
     int oldMouseCursor = gmouse_current_cursor;
-    if (gmouse_check_scrolling(mouseX, mouseY, MOUSE_CURSOR_NONE) == 0) {
+    if (!first_person_is_enabled()
+        && gmouse_check_scrolling(mouseX, mouseY, MOUSE_CURSOR_NONE) == 0) {
         switch (oldMouseCursor) {
         case MOUSE_CURSOR_SCROLL_NW:
         case MOUSE_CURSOR_SCROLL_N:
@@ -610,12 +618,14 @@ void gmouse_bk_process()
         gmouse_bk_last_cursor = -1;
     }
 
-    if (win_get_top_win(mouseX, mouseY) != display_win) {
+    if (win_get_top_visible_win(mouseX, mouseY) != first_person_window()) {
         if (gmouse_current_cursor == MOUSE_CURSOR_NONE) {
             gmouse_3d_off();
             gmouse_set_cursor(MOUSE_CURSOR_ARROW);
 
-            if (gmouse_3d_current_mode >= 2 && !isInCombat()) {
+            if (!first_person_is_enabled()
+                && gmouse_3d_current_mode >= 2
+                && !isInCombat()) {
                 gmouse_3d_set_mode(GAME_MOUSE_MODE_MOVE);
             }
         }
@@ -758,7 +768,20 @@ void gmouse_bk_process()
 
         char formattedActionPoints[8];
         int color;
-        int v6 = make_path(obj_dude, obj_dude->tile, obj_mouse_flat->tile, NULL, 1);
+        int destination;
+        if (first_person_is_enabled()) {
+            Rect viewRect;
+            if (win_get_rect(first_person_window(), &viewRect) == 0) {
+                const int centerX = viewRect.ulx + rectGetWidth(&viewRect) / 2;
+                const int centerY = viewRect.uly + rectGetHeight(&viewRect) / 2;
+                destination = first_person_target_tile(centerX, centerY);
+            } else {
+                destination = -1;
+            }
+        } else {
+            destination = obj_mouse_flat->tile;
+        }
+        int v6 = destination == -1 ? 0 : make_path(obj_dude, obj_dude->tile, destination, NULL, 1);
         if (v6) {
             if (!isInCombat()) {
                 formattedActionPoints[0] = '\0';
@@ -835,6 +858,23 @@ void gmouse_bk_process()
 }
 
 // 0x443AA0
+static bool gFirstPersonForceInteract = false;
+
+void gmouse_first_person_activate(bool interact)
+{
+    if (!first_person_world_input_allowed()) return;
+    Rect rect;
+    if (win_get_rect(first_person_window(), &rect) != 0) return;
+    const bool previousEdge = gmouse_clicked_on_edge;
+    gmouse_clicked_on_edge = false;
+    gFirstPersonForceInteract = interact;
+    gmouse_handle_event(rect.ulx + rectGetWidth(&rect) / 2,
+        rect.uly + rectGetHeight(&rect) / 2, MOUSE_EVENT_LEFT_BUTTON_UP);
+    gFirstPersonForceInteract = false;
+    gmouse_clicked_on_edge = previousEdge;
+    first_person_heap_check(interact ? "fp-input-interact" : "fp-input-reticle");
+}
+
 void gmouse_handle_event(int mouseX, int mouseY, int mouseState)
 {
     if (!gmouse_initialized) {
@@ -855,18 +895,25 @@ void gmouse_handle_event(int mouseX, int mouseY, int mouseState)
         }
     }
 
-    if (!mouse_click_in(0, 0, scr_size.lrx - scr_size.ulx, scr_size.lry - scr_size.uly - 100)) {
+    const int mouseBottom = first_person_is_enabled()
+        ? scr_size.lry - scr_size.uly
+        : scr_size.lry - scr_size.uly - 100;
+    if (!mouse_click_in(0, 0, scr_size.lrx - scr_size.ulx, mouseBottom)) {
         return;
     }
 
     // CE: Make sure we cannot go outside of the map.
-    if (!tile_point_inside_bound(mouseX, mouseY)) {
+    if (!first_person_is_enabled() && !tile_point_inside_bound(mouseX, mouseY)) {
         return;
     }
 
+    if (first_person_is_enabled() && !first_person_world_input_allowed()) return;
+
     if ((mouseState & MOUSE_EVENT_RIGHT_BUTTON_DOWN) != 0) {
         if ((mouseState & MOUSE_EVENT_RIGHT_BUTTON_REPEAT) == 0) {
-            if (gmouse_3d_is_on()) {
+            if (first_person_is_enabled()) {
+                first_person_cycle_mode();
+            } else if (gmouse_3d_is_on()) {
                 gmouse_3d_toggle_mode();
             }
         }
@@ -874,6 +921,83 @@ void gmouse_handle_event(int mouseX, int mouseY, int mouseState)
     }
 
     if ((mouseState & MOUSE_EVENT_LEFT_BUTTON_UP) != 0) {
+        if (first_person_is_enabled()) {
+            if (!first_person_world_input_allowed()) return;
+            // Resolve the click against the current camera/object scene even
+            // if animation dirtied it after the previous presentation.
+            first_person_flush_render();
+            const int firstPersonMode = gFirstPersonForceInteract ? GAME_MOUSE_MODE_ARROW : first_person_mode();
+            if (firstPersonMode == GAME_MOUSE_MODE_CROSSHAIR) {
+                if (intface_current_action() == INTERFACE_ITEM_ACTION_RELOAD) {
+                    intface_use_item();
+                    first_person_render();
+                    return;
+                }
+                Object* target = object_under_mouse(
+                    OBJ_TYPE_CRITTER,
+                    false,
+                    map_elevation);
+                if (target != NULL) {
+                    if (!isInCombat()) {
+                        STRUCT_664980 attack {};
+                        attack.attacker = obj_dude;
+                        attack.defender = target;
+                        attack.actionPointsBonus = 0;
+                        attack.accuracyBonus = 0;
+                        attack.damageBonus = 0;
+                        attack.minDamage = 0;
+                        attack.maxDamage = INT_MAX;
+                        attack.field_1C = 0;
+                        combat(&attack);
+                    } else {
+                        combat_attack_this(target);
+                    }
+                }
+                return;
+            }
+
+            if (firstPersonMode == GAME_MOUSE_MODE_ARROW) {
+                Object* target = object_under_mouse(-1, true, map_elevation);
+                if (target != NULL) {
+                    switch (FID_TYPE(target->fid)) {
+                    case OBJ_TYPE_ITEM:
+                        // Native pickup already routes fixed containers through
+                        // open/lock/scripts/loot and portable ones into inventory.
+                        action_get_an_object(obj_dude, target);
+                        break;
+                    case OBJ_TYPE_CRITTER:
+                        if (target != obj_dude) {
+                            if (obj_action_can_talk_to(target)) {
+                                if (isInCombat()) {
+                                    if (obj_examine(obj_dude, target) == -1) {
+                                        obj_look_at(obj_dude, target);
+                                    }
+                                } else {
+                                    action_talk_to(obj_dude, target);
+                                }
+                            } else {
+                                action_loot_container(obj_dude, target);
+                            }
+                        }
+                        break;
+                    case OBJ_TYPE_SCENERY:
+                        if (proto_action_can_use(target->pid)) {
+                            action_use_an_object(obj_dude, target);
+                        } else if (obj_examine(obj_dude, target) == -1) {
+                            obj_look_at(obj_dude, target);
+                        }
+                        break;
+                    case OBJ_TYPE_WALL:
+                        if (obj_examine(obj_dude, target) == -1) {
+                            obj_look_at(obj_dude, target);
+                        }
+                        break;
+                    }
+                }
+                return;
+            }
+        }
+
         if (gmouse_3d_current_mode == GAME_MOUSE_MODE_MOVE) {
             int actionPoints;
             if (isInCombat()) {
@@ -952,7 +1076,26 @@ void gmouse_handle_event(int mouseX, int mouseY, int mouseState)
         if (gmouse_3d_current_mode == GAME_MOUSE_MODE_CROSSHAIR) {
             Object* target = object_under_mouse(OBJ_TYPE_CRITTER, false, map_elevation);
             if (target != NULL) {
-                combat_attack_this(target);
+                if (first_person_is_enabled() && !isInCombat()) {
+                    // Native combat_attack_this refuses to run before the
+                    // player's combat-turn bit is active. First-person attack
+                    // mode should still be able to initiate combat from the
+                    // center reticle, so enter combat with this live target as
+                    // the initial defender using Fallout's normal combat setup.
+                    STRUCT_664980 attack {};
+                    attack.attacker = obj_dude;
+                    attack.defender = target;
+                    attack.actionPointsBonus = 0;
+                    attack.accuracyBonus = 0;
+                    attack.damageBonus = 0;
+                    attack.minDamage = 0;
+                    attack.maxDamage = INT_MAX;
+                    attack.field_1C = 0;
+                    combat(&attack);
+                } else {
+                    combat_attack_this(target);
+                }
+
                 gmouse_3d_hover_test = true;
                 gmouse_3d_last_mouse_y = mouseY;
                 gmouse_3d_last_mouse_x = mouseX;
@@ -1345,6 +1488,7 @@ void gmouse_3d_set_mode(int mode)
     }
 
     gmouse_3d_current_mode = mode;
+    if (first_person_is_enabled()) first_person_render();
     gmouse_3d_hover_test = false;
     gmouse_3d_last_move_time = get_time();
 
@@ -1569,6 +1713,23 @@ Object* object_under_mouse(int objectType, bool a2, int elevation)
     int mouseY;
     mouse_get_position(&mouseX, &mouseY);
 
+    if (first_person_is_enabled()) {
+        // First-person world interaction is camera-centered in every world mode.
+        // This gives movement, inspect/use, and combat one authoritative reticle
+        // instead of letting a hidden/free mouse pointer disagree with the view.
+        Rect viewRect;
+        if (win_get_rect(first_person_window(), &viewRect) != 0) {
+            return nullptr;
+        }
+        const int pickX = viewRect.ulx + rectGetWidth(&viewRect) / 2;
+        const int pickY = viewRect.uly + rectGetHeight(&viewRect) / 2;
+
+        if (win_get_top_visible_win(pickX, pickY) != first_person_window()) {
+            return nullptr;
+        }
+        return first_person_object_at(pickX, pickY, objectType, a2, elevation);
+    }
+
     bool v13 = false;
     if (objectType == -1) {
         if (square_roof_intersect(mouseX, mouseY, elevation)) {
@@ -1641,7 +1802,10 @@ int gmouse_3d_build_pick_frame(int x, int y, int menuItem, int width, int height
 
     int maxX = x + menuItemFrmWidth + arrowFrmWidth - 1;
     int maxY = y + menuItemFrmHeight - 1;
-    int shiftY = maxY - height + 2;
+    // Keep the shifted arrow inside the frame. The native map area bounds y,
+    // but a first-person view also covers the interface bar's screen band.
+    int shiftY = std::min(maxY - height + 2,
+        std::max(0, gmouse_3d_pick_frame_height - arrowFrmHeight));
 
     if (maxX < width) {
         menuItemFrmDest += arrowFrmWidth;
@@ -1744,7 +1908,9 @@ int gmouse_3d_build_menu_frame(int x, int y, const int* menuItems, int menuItems
     gmouse_3d_menu_frame->yOffsets[0] = gmouse_3d_menu_frame_height - 1;
 
     int v60 = y + menuItemsLength * menuItemHeight - 1;
-    int v24 = v60 - height + 2;
+    // Keep the shifted arrow inside the frame, as in the pick frame.
+    int v24 = std::min(v60 - height + 2,
+        std::max(0, gmouse_3d_menu_frame_height - arrowHeight));
     unsigned char* v22 = gmouse_3d_menu_frame_data;
     unsigned char* v58 = v22;
 
@@ -2179,7 +2345,17 @@ static int gmouse_3d_move_to(int x, int y, int elevation, Rect* a4)
 
             obj_move(obj_mouse_flat, x + offsetX, y + offsetY, elevation, a4);
         } else {
-            int tile = tile_num(x, y, 0);
+            int tile = first_person_is_enabled()
+                ? first_person_target_tile(x, y)
+                : tile_num(x, y, 0);
+            if (first_person_is_enabled() && tile == -1) {
+                // Repaint the first-person pointer even over the sky. Do not
+                // move the engine hex cursor to an invalid tile; click and AP
+                // paths independently reject this missing ground intersection.
+                const int viewWindow = first_person_window();
+                *a4 = { 0, 0, win_width(viewWindow) - 1, win_height(viewWindow) - 1 };
+                return 0;
+            }
             if (tile != -1) {
                 int screenX;
                 int screenY;

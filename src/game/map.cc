@@ -11,6 +11,7 @@
 #include "game/critter.h"
 #include "game/cycle.h"
 #include "game/editor.h"
+#include "game/first_person.h"
 #include "game/game.h"
 #include "game/gconfig.h"
 #include "game/gmouse.h"
@@ -712,6 +713,13 @@ int map_get_index_number()
 // 0x474284
 int map_scroll(int dx, int dy)
 {
+    // The isometric camera must stay fixed while the first-person renderer is
+    // active. This catches edge scrolling, wheel scrolling and arrow keys at
+    // the common map-scroll entry point.
+    if (first_person_is_enabled()) {
+        return -1;
+    }
+
     if (elapsed_time(map_last_scroll_time) < 33) {
         return -2;
     }
@@ -918,6 +926,7 @@ int map_load_idx(int map)
 // 0x47471C
 int map_load_file(DB_FILE* stream)
 {
+    FirstPersonModalScope firstPersonModal;
     int rc = 0;
     const char* error;
 
@@ -1249,6 +1258,7 @@ int map_check_state()
     if (map_state.map == 0) {
         return 0;
     }
+    FirstPersonModalScope firstPersonModal;
 
     gmouse_3d_off();
     gmouse_set_cursor(MOUSE_CURSOR_NONE);
@@ -1591,6 +1601,14 @@ static void map_match_map_number()
 // 0x475C3C
 static void map_display_draw(Rect* rect)
 {
+    if (first_person_is_enabled()) {
+        // The full-screen first-person window is now the visible presentation.
+        // Do not also redraw the hidden isometric display window underneath it;
+        // that doubles compositing work during camera motion.
+        first_person_render();
+        return;
+    }
+
     win_draw_rect(display_win, rect);
 }
 

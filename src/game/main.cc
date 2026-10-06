@@ -18,6 +18,7 @@
 #include "game/credits.h"
 #include "game/cycle.h"
 #include "game/endgame.h"
+#include "game/first_person_heap_check.h"
 #include "game/game.h"
 #include "game/gconfig.h"
 #include "game/gmouse.h"
@@ -323,11 +324,15 @@ static void main_game_loop()
         sharedFpsLimiter.mark();
 
         int keyCode = get_input();
+        first_person_heap_check("loop-get-input");
         game_handle_input(keyCode, false);
+        first_person_heap_check("loop-handle-input");
 
         scripts_check_state();
+        first_person_heap_check("loop-scripts");
 
         map_check_state();
+        first_person_heap_check("loop-map");
 
         if (main_game_paused != 0) {
             main_game_paused = 0;

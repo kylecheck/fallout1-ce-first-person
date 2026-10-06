@@ -1,4 +1,5 @@
 #include "game/display.h"
+#include "game/first_person.h"
 
 #include <string.h>
 
@@ -189,6 +190,7 @@ void display_exit()
 // 0x42BE3C
 void display_print(char* str)
 {
+    first_person_notify(str);
     // 0x56E2E8
     static unsigned int lastTime;
 

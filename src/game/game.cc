@@ -1,4 +1,5 @@
 #include "game/game.h"
+#include "game/gamepad_bindings.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -15,6 +16,7 @@
 #include "game/editor.h"
 #include "game/endgame.h"
 #include "game/fontmgr.h"
+#include "game/first_person.h"
 #include "game/gconfig.h"
 #include "game/gdialog.h"
 #include "game/gmemory.h"
@@ -34,6 +36,7 @@
 #include "game/perk.h"
 #include "game/pipboy.h"
 #include "game/proto.h"
+#include "game/protinst.h"
 #include "game/queue.h"
 #include "game/roll.h"
 #include "game/scripts.h"
@@ -487,6 +490,30 @@ int game_handle_input(int eventCode, bool isInCombatMode)
     }
 
     switch (eventCode) {
+    case GAMEPAD_INTERACT:
+        gmouse_first_person_activate(true);
+        break;
+    case GAMEPAD_RETICLE_ACTION:
+        gmouse_first_person_activate(false);
+        break;
+    case KEY_F8:
+        if (first_person_world_input_allowed()) first_person_action_menu();
+        break;
+    case KEY_UPPERCASE_E:
+    case KEY_LOWERCASE_E:
+        if (first_person_world_input_allowed()) {
+            first_person_flush_render();
+            Object* target = object_under_mouse(-1, false, map_elevation);
+            if (target != nullptr && obj_examine(obj_dude, target) == -1) obj_look_at(obj_dude, target);
+        }
+        break;
+    case KEY_UPPERCASE_R:
+    case KEY_LOWERCASE_R:
+        if (first_person_world_input_allowed()) {
+            intface_reload_current();
+            first_person_render();
+        }
+        break;
     case -20:
         if (intface_is_enabled()) {
             intface_use_item();
@@ -548,11 +575,16 @@ int game_handle_input(int eventCode, bool isInCombatMode)
         if (intface_is_enabled()) {
             gsound_play_sfx_file("ib1p1xx1");
             intface_toggle_item_state();
+            first_person_render();
         }
         break;
     case KEY_UPPERCASE_M:
     case KEY_LOWERCASE_M:
-        gmouse_3d_toggle_mode();
+        if (first_person_is_enabled()) {
+            first_person_cycle_mode();
+        } else {
+            gmouse_3d_toggle_mode();
+        }
         break;
     case KEY_UPPERCASE_B:
     case KEY_LOWERCASE_B:
@@ -560,6 +592,7 @@ int game_handle_input(int eventCode, bool isInCombatMode)
         if (intface_is_enabled()) {
             gsound_play_sfx_file("ib1p1xx1");
             intface_toggle_items(true);
+            first_person_render();
         }
         break;
     case KEY_UPPERCASE_C:
@@ -587,7 +620,14 @@ int game_handle_input(int eventCode, bool isInCombatMode)
         // options
         if (intface_is_enabled()) {
             gsound_play_sfx_file("ib1p1xx1");
+            const bool resumeFirstPerson = first_person_is_enabled();
+            if (resumeFirstPerson) {
+                first_person_suspend_overlay();
+            }
             do_options();
+            if (resumeFirstPerson) {
+                first_person_resume_overlay();
+            }
         }
         break;
     case KEY_UPPERCASE_P:
@@ -810,6 +850,22 @@ int game_handle_input(int eventCode, bool isInCombatMode)
         gsound_play_sfx_file("ib1p1xx1");
         game_help();
         break;
+    case KEY_F11:
+    case KEY_0:
+    case 337: { // Steam Deck R5 via the user's current Steam Input layout.
+        // Experimental first-person presentation toggle.
+        first_person_toggle();
+        if (first_person_is_enabled()) {
+            gmouse_disable_scrolling();
+        } else {
+            gmouse_enable_scrolling();
+        }
+        char firstPersonOn[] = "FIRST PERSON: ON";
+        char firstPersonOff[] = "FIRST PERSON: OFF";
+        display_print(first_person_is_enabled() ? firstPersonOn : firstPersonOff);
+        tile_refresh_display();
+        break;
+    }
     case KEY_F2:
         gsound_set_master_volume(gsound_get_master_volume() - 2047);
         break;
@@ -871,16 +927,48 @@ int game_handle_input(int eventCode, bool isInCombatMode)
         }
         break;
     case KEY_ARROW_LEFT:
-        map_scroll(-1, 0);
+        if (first_person_is_enabled()) {
+            // Steam Input can still emit the legacy arrow binding while the
+            // native left stick is held. Do not let that duplicate input yaw
+            // the camera immediately before a lateral native hex move.
+            if (!first_person_controller_move_active()) {
+                first_person_turn(-1);
+            }
+        } else {
+            map_scroll(-1, 0);
+        }
         break;
     case KEY_ARROW_RIGHT:
-        map_scroll(1, 0);
+        if (first_person_is_enabled()) {
+            if (!first_person_controller_move_active()) {
+                first_person_turn(1);
+            }
+        } else {
+            map_scroll(1, 0);
+        }
         break;
     case KEY_ARROW_UP:
-        map_scroll(0, -1);
+        if (first_person_is_enabled()) {
+            // Steam Input may still emit the legacy arrow binding while the
+            // native left stick is held. Suppress the duplicate key path so a
+            // single forward stick press cannot queue extra hex moves.
+            if (!first_person_controller_move_active()) {
+                first_person_move(first_person_rotation());
+            }
+        } else {
+            map_scroll(0, -1);
+        }
         break;
     case KEY_ARROW_DOWN:
-        map_scroll(0, 1);
+        if (first_person_is_enabled()) {
+            if (!first_person_controller_move_active()) {
+                // Backpedal one hex without changing the viewing direction.
+                const int reverseRotation = (first_person_rotation() + ROTATION_COUNT / 2) % ROTATION_COUNT;
+                first_person_move(reverseRotation);
+            }
+        } else {
+            map_scroll(0, 1);
+        }
         break;
     }
 
@@ -1167,6 +1255,7 @@ static void game_help()
 // 0x43D274
 int game_quit_with_confirm()
 {
+    FirstPersonModalScope firstPersonModal;
     bool isoWasEnabled = map_disable_bk_processes();
 
     bool gameMouseWasVisible;
