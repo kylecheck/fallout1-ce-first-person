@@ -1,4 +1,5 @@
 #include "game/first_person.h"
+#include "game/first_person_gpu.h"
 #include "game/first_person_wall.h"
 #include "game/first_person_doorway.h"
 #include "game/first_person_material.h"
@@ -903,6 +904,7 @@ void first_person_render()
         return;
     }
 
+    first_person_gpu_begin_frame();
     first_person_dump_map();
 
     gPickWidth = width;
@@ -2499,33 +2501,25 @@ void first_person_render()
                                 std::lround(height * bottomFraction));
                             const int top = bottom - drawHeight;
 
-                            for (int dy = 0; dy < drawHeight; dy++) {
-                                const int py = top + dy;
-                                if (py < 0 || py >= height) {
-                                    continue;
-                                }
-
-                                const int sy = opaqueMinY + std::clamp(
-                                    dy * sourceHeight / drawHeight,
-                                    0,
-                                    sourceHeight - 1);
-                                for (int dx = 0; dx < drawWidth; dx++) {
-                                    const int px = left + dx;
-                                    if (px < 0 || px >= width) {
-                                        continue;
-                                    }
-
-                                    const int sx = opaqueMinX + std::clamp(
-                                        dx * sourceWidth / drawWidth,
-                                        0,
-                                        sourceWidth - 1);
-                                    const unsigned char pixel =
-                                        weaponPixels[sy * weaponFrame->width + sx];
-                                    if (pixel != 0) {
-                                        buffer[py * width + px] = pixel;
-                                    }
-                                }
-                            }
+                            // This is the first textured first-person element
+                            // migrated off the software framebuffer. The source
+                            // remains Fallout's native inventory FRM; SDL uploads
+                            // it once and scales/composites it on the GPU.
+                            const long long gpuKey =
+                                (1LL << 48) | static_cast<unsigned int>(inventoryFid);
+                            first_person_gpu_submit_indexed_sprite(
+                                gpuKey,
+                                weaponPixels,
+                                weaponFrame->width,
+                                weaponFrame->height,
+                                opaqueMinX,
+                                opaqueMinY,
+                                sourceWidth,
+                                sourceHeight,
+                                left,
+                                top,
+                                drawWidth,
+                                drawHeight);
                         }
                     }
 
