@@ -381,6 +381,21 @@ void first_person_cycle_mode()
     gmouse_3d_set_mode(nextMode);
 }
 
+void first_person_suspend_overlay()
+{
+    if (gFirstPersonEnabled && gFirstPersonWindow != -1) {
+        win_hide(gFirstPersonWindow);
+    }
+}
+
+void first_person_resume_overlay()
+{
+    if (gFirstPersonEnabled && gFirstPersonWindow != -1) {
+        win_show(gFirstPersonWindow);
+        first_person_render();
+    }
+}
+
 void first_person_update()
 {
     if (!gFirstPersonEnabled) {
