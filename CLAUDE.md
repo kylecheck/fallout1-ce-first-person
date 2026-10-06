@@ -58,7 +58,8 @@ Unit tests also run inside the SDK, e.g.:
 ```sh
 flatpak run --filesystem=home --command=sh org.freedesktop.Sdk//24.08 -c \
  'cd ~/fallout1-ce-first-person && g++ -std=c++17 -Wall -Wextra -Werror \
-  -ffunction-sections -fdata-sections -Isrc tests/first_person_input_test.cc \
+  -ffunction-sections -fdata-sections -Isrc $(sdl2-config --cflags) \
+  tests/first_person_input_test.cc \
   -Wl,--gc-sections -o /tmp/fp-input-test && /tmp/fp-input-test'
 ```
 

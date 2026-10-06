@@ -688,7 +688,6 @@ static bool first_person_update_controller_look()
         gFirstPersonController,
         SDL_CONTROLLER_AXIS_RIGHTY));
 
-    constexpr double kDeadZone = 0.18;
     auto applyDeadZone = [](double axis) {
         constexpr double deadZone = 0.18;
         if (std::abs(axis) <= deadZone) {
@@ -2517,8 +2516,6 @@ static void first_person_render_now()
     }
 
     Object* firstPersonHoverObject = nullptr;
-    const bool firstPersonCombatAim =
-        first_person_mode() == GAME_MOUSE_MODE_CROSSHAIR;
     const int hoverX = width / 2;
     const int hoverY = height / 2;
     first_person_heap_check(gpuWorld ? "fp-world-gpu" : "fp-world-software");
