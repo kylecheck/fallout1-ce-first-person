@@ -33,6 +33,8 @@ bool heap_lock(Heap* heap, int handleIndex, unsigned char** bufferPtr);
 bool heap_unlock(Heap* heap, int handleIndex);
 bool heap_stats(Heap* heap, char* dest, size_t size);
 bool heap_validate(Heap* heap);
+// Reason for the most recent heap_validate failure; empty after success.
+const char* heap_validate_last_failure();
 
 } // namespace fallout
 

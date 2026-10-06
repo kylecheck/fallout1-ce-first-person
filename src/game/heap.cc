@@ -513,9 +513,26 @@ bool heap_unlock(Heap* heap, int handleIndex)
 }
 
 // 0x44A5A4
+// Reason for the most recent heap_validate failure, for diagnostics.
+static char heap_validate_failure[160];
+
+static bool heap_validate_fail(const char* reason, int blockIndex, long offset)
+{
+    snprintf(heap_validate_failure, sizeof(heap_validate_failure),
+        "%s block=%d offset=%ld", reason, blockIndex, offset);
+    debug_printf("%s during validate.\n", reason);
+    return false;
+}
+
+const char* heap_validate_last_failure()
+{
+    return heap_validate_failure;
+}
+
 bool heap_validate(Heap* heap)
 {
     debug_printf("Validating heap...\n");
+    heap_validate_failure[0] = '\0';
 
     int blocksCount = heap->freeBlocks + heap->moveableBlocks + heap->lockedBlocks;
     unsigned char* ptr = heap->data;
@@ -529,15 +546,25 @@ bool heap_validate(Heap* heap)
 
     for (int index = 0; index < blocksCount; index++) {
         HeapBlockHeader* blockHeader = (HeapBlockHeader*)ptr;
+        const long offset = static_cast<long>(ptr - heap->data);
+        if (offset < 0 || offset + static_cast<long>(HEAP_BLOCK_OVERHEAD_SIZE) > heap->size) {
+            return heap_validate_fail("Ran off end of heap", index, offset);
+        }
+
         if (blockHeader->guard != HEAP_BLOCK_HEADER_GUARD) {
-            debug_printf("Bad guard begin detected during validate.\n");
-            return false;
+            return heap_validate_fail("Bad guard begin detected", index, offset);
+        }
+
+        // Check the size before using it to locate the footer, so a corrupted
+        // header is reported instead of faulting inside the validator.
+        if (blockHeader->size < 0
+            || blockHeader->size > heap->size - offset - static_cast<long>(HEAP_BLOCK_OVERHEAD_SIZE)) {
+            return heap_validate_fail("Bad block size detected", index, offset);
         }
 
         HeapBlockFooter* blockFooter = (HeapBlockFooter*)(ptr + blockHeader->size + HEAP_BLOCK_HEADER_SIZE);
         if (blockFooter->guard != HEAP_BLOCK_FOOTER_GUARD) {
-            debug_printf("Bad guard end detected during validate.\n");
-            return false;
+            return heap_validate_fail("Bad guard end detected", index, offset);
         }
 
         if (blockHeader->state == HEAP_BLOCK_STATE_FREE) {
@@ -554,40 +581,33 @@ bool heap_validate(Heap* heap)
         if (index != blocksCount - 1) {
             ptr += blockHeader->size + HEAP_BLOCK_OVERHEAD_SIZE;
             if (ptr > (heap->data + heap->size)) {
-                debug_printf("Ran off end of heap during validate!\n");
-                return false;
+                return heap_validate_fail("Ran off end of heap", index, static_cast<long>(ptr - heap->data));
             }
         }
     }
 
     if (freeBlocks != heap->freeBlocks) {
-        debug_printf("Invalid number of free blocks.\n");
-        return false;
+        return heap_validate_fail("Invalid number of free blocks", -1, -1);
     }
 
     if (freeSize != heap->freeSize) {
-        debug_printf("Invalid size of free blocks.\n");
-        return false;
+        return heap_validate_fail("Invalid size of free blocks", -1, -1);
     }
 
     if (moveableBlocks != heap->moveableBlocks) {
-        debug_printf("Invalid number of moveable blocks.\n");
-        return false;
+        return heap_validate_fail("Invalid number of moveable blocks", -1, -1);
     }
 
     if (moveableSize != heap->moveableSize) {
-        debug_printf("Invalid size of moveable blocks.\n");
-        return false;
+        return heap_validate_fail("Invalid size of moveable blocks", -1, -1);
     }
 
     if (lockedBlocks != heap->lockedBlocks) {
-        debug_printf("Invalid number of locked blocks.\n");
-        return false;
+        return heap_validate_fail("Invalid number of locked blocks", -1, -1);
     }
 
     if (lockedSize != heap->lockedSize) {
-        debug_printf("Invalid size of locked blocks.\n");
-        return false;
+        return heap_validate_fail("Invalid size of locked blocks", -1, -1);
     }
 
     debug_printf("Heap is O.K.\n");
@@ -600,14 +620,12 @@ bool heap_validate(Heap* heap)
         if (handle->state != HEAP_HANDLE_STATE_INVALID && (handle->state & HEAP_BLOCK_STATE_SYSTEM) != 0) {
             HeapBlockHeader* blockHeader = (HeapBlockHeader*)handle->data;
             if (blockHeader->guard != HEAP_BLOCK_HEADER_GUARD) {
-                debug_printf("Bad guard begin detected in system block during validate.\n");
-                return false;
+                return heap_validate_fail("Bad guard begin detected in system block", handleIndex, -1);
             }
 
             HeapBlockFooter* blockFooter = (HeapBlockFooter*)(handle->data + blockHeader->size + HEAP_BLOCK_HEADER_SIZE);
             if (blockFooter->guard != HEAP_BLOCK_FOOTER_GUARD) {
-                debug_printf("Bad guard end detected in system block during validate.\n");
-                return false;
+                return heap_validate_fail("Bad guard end detected in system block", handleIndex, -1);
             }
 
             systemBlocks++;
@@ -616,13 +634,11 @@ bool heap_validate(Heap* heap)
     }
 
     if (systemBlocks != heap->systemBlocks) {
-        debug_printf("Invalid number of system blocks.\n");
-        return false;
+        return heap_validate_fail("Invalid number of system blocks", -1, -1);
     }
 
     if (systemSize != heap->systemSize) {
-        debug_printf("Invalid size of system blocks.\n");
-        return false;
+        return heap_validate_fail("Invalid size of system blocks", -1, -1);
     }
 
     return true;

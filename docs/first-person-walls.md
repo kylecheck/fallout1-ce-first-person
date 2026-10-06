@@ -1165,3 +1165,30 @@ g++ -std=c++17 -ffunction-sections -fdata-sections -Isrc $(sdl2-config --cflags)
 g++ -std=c++17 -Wall -Wextra -Werror -Isrc $(sdl2-config --cflags) tests/first_person_gpu_ui_test.cc $(sdl2-config --libs) -o /tmp/fp-gpu-ui-test
 SDL_VIDEODRIVER=dummy /tmp/fp-gpu-ui-test
 ```
+
+
+### Opt-in art-cache heap checks
+
+Set `FALLOUT_FP_HEAP_CHECK=1` to validate Fallout's art-cache heap at labelled
+checkpoints. A loot crash showed `heap_build_free_list` walking a corrupted
+block. That walk only runs under allocation pressure, so it detects the damage
+late rather than locating its cause.
+
+Checkpoints cover first-person frames (`fp-frame-begin`, `fp-world-gpu` or
+`fp-world-software`, `fp-weapon-before`/`-after`, `fp-frame-gpu` or
+`fp-frame-software`), first-person input (`fp-input-interact`,
+`fp-input-reticle`, `fp-input-move`, `fp-action-menu`), toggling, native modal
+entry/exit and the start of `loot_container` and `handle_inventory`. The first
+failure is written to the `FALLOUT_FP_INPUT_LOG` recording and stderr as
+`HEAP_CHECK_FAILED label=... frame=... reason=...` with the heap counters, then
+the game aborts. The label is the first checkpoint after the damage. The input
+log records `HEAP_CHECK enabled` on the first check.
+
+`heap_validate` now checks a block's size against the heap bounds before using
+it to find the footer, so a corrupted header is reported instead of faulting in
+the validator. Without the variable, no checks run.
+
+```sh
+g++ -std=c++17 -Wall -Wextra -Werror -Wno-sign-compare -Wno-unused-parameter -ffunction-sections -fdata-sections -Isrc $(sdl2-config --cflags) tests/first_person_heap_check_test.cc -Wl,--gc-sections -o /tmp/fp-heap-check-test
+/tmp/fp-heap-check-test
+```

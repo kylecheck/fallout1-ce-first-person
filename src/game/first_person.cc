@@ -1,6 +1,7 @@
 #include "game/first_person.h"
 #include "game/gamepad.h"
 #include "game/first_person_gpu.h"
+#include "game/first_person_heap_check.h"
 #include "game/first_person_world_gpu.h"
 #include "game/first_person_projection.h"
 #include "game/first_person_frame.h"
@@ -150,6 +151,8 @@ static bool gFirstPersonEnabled = false;
 static FirstPersonFrameRequest gFirstPersonScene;
 static bool gFirstPersonOverlaySuspended = false;
 static int gFirstPersonModalDepth = 0;
+// Path of the last world frame, for heap-check labels.
+static bool gFirstPersonLastFrameGpu = false;
 static bool gFirstPersonActionMenuActive = false;
 static char gFirstPersonNotice[512] = {};
 static Uint64 gFirstPersonNoticeUntil = 0;
@@ -270,6 +273,7 @@ int first_person_window()
 
 void first_person_toggle()
 {
+    first_person_heap_check("fp-toggle-before");
     gFirstPersonEnabled = !gFirstPersonEnabled;
     gFirstPersonScene.request();
     gFirstPersonOverlaySuspended = false;
@@ -317,6 +321,7 @@ void first_person_toggle()
 
     gFirstPersonPicks.clear();
     gFirstPersonInteractionPicks.clear();
+    first_person_heap_check("fp-toggle-after");
 }
 
 // The view heading belongs to presentation, not native animation/pathing.
@@ -519,18 +524,25 @@ void first_person_action_menu()
     gFirstPersonControllerTicks = 0;
     gFirstPersonMoveTicks = 0;
     first_person_render();
+    first_person_heap_check("fp-action-menu");
     if (command != -1 && game_user_wants_to_quit == 0) GNW_add_input_buffer(command);
 }
 
 FirstPersonModalScope::FirstPersonModalScope()
     : active_(first_person_is_enabled())
 {
-    if (active_) first_person_suspend_overlay();
+    if (active_) {
+        first_person_heap_check("fp-modal-enter");
+        first_person_suspend_overlay();
+    }
 }
 
 FirstPersonModalScope::~FirstPersonModalScope()
 {
-    if (active_) first_person_resume_overlay();
+    if (active_) {
+        first_person_heap_check("fp-modal-exit");
+        first_person_resume_overlay();
+    }
 }
 
 bool first_person_overlay_visible()
@@ -565,6 +577,7 @@ void first_person_move(int rotation)
         register_object_move_to_tile(obj_dude, destination, obj_dude->elevation, ap, 0);
         register_end();
     }
+    first_person_heap_check("fp-input-move");
 }
 
 void first_person_update()
@@ -1026,11 +1039,15 @@ void first_person_render()
 void first_person_flush_render()
 {
     if (!gFirstPersonScene.take(gFirstPersonEnabled, gFirstPersonOverlaySuspended)) return;
+    first_person_heap_check_frame();
+    first_person_heap_check("fp-frame-begin");
     first_person_render_now();
+    first_person_heap_check(gFirstPersonLastFrameGpu ? "fp-frame-gpu" : "fp-frame-software");
 }
 
 static void first_person_render_now()
 {
+    gFirstPersonLastFrameGpu = false;
     const int viewWindow = first_person_window();
     if (!gFirstPersonEnabled || obj_dude == nullptr || viewWindow == -1) {
         return;
@@ -1080,6 +1097,7 @@ static void first_person_render_now()
     static const bool debugWalls = std::getenv("FALLOUT_FP_WALL_DEBUG") != nullptr;
     const bool gpuWorld = !debugWalls && first_person_world_gpu_begin(
         width, height, horizon, static_cast<unsigned char>(sky), static_cast<unsigned char>(ground));
+    gFirstPersonLastFrameGpu = gpuWorld;
     std::vector<FirstPersonPick> gpuOwners { { nullptr, -1 } };
     auto gpuOwner = [&](Object* object) -> std::uint32_t {
         gpuOwners.push_back({ object, object->id });
@@ -2503,6 +2521,7 @@ static void first_person_render_now()
         first_person_mode() == GAME_MOUSE_MODE_CROSSHAIR;
     const int hoverX = width / 2;
     const int hoverY = height / 2;
+    first_person_heap_check(gpuWorld ? "fp-world-gpu" : "fp-world-software");
 
     // Native Fallout outlines are painted by the isometric world renderer, so
     // they are not visible when the first-person scene replaces that renderer.
@@ -2760,6 +2779,7 @@ static void first_person_render_now()
                 break;
             }
 
+            first_person_heap_check("fp-weapon-before");
             const int inventoryFid = item_inv_fid(heldItem);
             if (inventoryFid >= 0 && art_exists(inventoryFid)) {
                 CacheEntry* weaponArtKey = nullptr;
@@ -2838,6 +2858,7 @@ static void first_person_render_now()
                     art_ptr_unlock(weaponArtKey);
                 }
             }
+            first_person_heap_check("fp-weapon-after");
         }
     }
 

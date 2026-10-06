@@ -66,15 +66,26 @@ static const char* key_name(int key)
     default: return "OTHER";
     }
 }
-static void log_input(const char* format, ...)
+static void log_input_v(const char* format, va_list args)
 {
     if (inputLog == nullptr) return;
     std::fprintf(inputLog, "[%llu ms] ", static_cast<unsigned long long>(SDL_GetTicks64() - logStarted));
+    std::vfprintf(inputLog, format, args);
+    std::fputc('\n', inputLog);
+}
+static void log_input(const char* format, ...)
+{
     va_list args;
     va_start(args, format);
-    std::vfprintf(inputLog, format, args);
+    log_input_v(format, args);
     va_end(args);
-    std::fputc('\n', inputLog);
+}
+void gamepad_log(const char* format, ...)
+{
+    va_list args;
+    va_start(args, format);
+    log_input_v(format, args);
+    va_end(args);
 }
 static void log_axis(bool raw, SDL_JoystickID device, int axis, int value)
 {

@@ -12,5 +12,7 @@ const char* gamepad_diagnostic();
 SDL_GameController* gamepad_controller();
 void gamepad_mouse_state(int* dx, int* dy, bool* left);
 bool gamepad_has_paddles();
+// Appends one line to the FALLOUT_FP_INPUT_LOG recording, if enabled.
+void gamepad_log(const char* format, ...);
 }
 #endif

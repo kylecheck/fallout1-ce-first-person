@@ -30,6 +30,7 @@ int tile_num_in_direction(int tile, int rotation, int distance)
 }
 int register_begin(int) { return 0; }
 int register_end() { return 0; }
+void first_person_heap_check(const char*) {}
 int register_object_move_to_tile(Object* object, int tile, int elevation, int ap, int)
 {
     assert(object == obj_dude && tile == obj_dude->tile + 1 && elevation == obj_dude->elevation);

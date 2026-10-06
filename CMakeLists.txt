@@ -86,6 +86,8 @@ target_sources(${EXECUTABLE_NAME} PUBLIC
     "src/game/first_person_world_gpu.cc"
     "src/game/first_person_world_gpu.h"
     "src/game/first_person_gpu.h"
+    "src/game/first_person_heap_check.cc"
+    "src/game/first_person_heap_check.h"
     "src/game/first_person_wall.h"
     "src/game/first_person_doorway.h"
     "src/game/first_person_material.h"

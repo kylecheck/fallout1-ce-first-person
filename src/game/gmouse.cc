@@ -10,6 +10,7 @@
 #include "game/combat.h"
 #include "game/critter.h"
 #include "game/first_person.h"
+#include "game/first_person_heap_check.h"
 #include "game/game.h"
 #include "game/gconfig.h"
 #include "game/gsound.h"
@@ -869,6 +870,7 @@ void gmouse_first_person_activate(bool interact)
         rect.uly + rectGetHeight(&rect) / 2, MOUSE_EVENT_LEFT_BUTTON_UP);
     gFirstPersonForceInteract = false;
     gmouse_clicked_on_edge = previousEdge;
+    first_person_heap_check(interact ? "fp-input-interact" : "fp-input-reticle");
 }
 
 void gmouse_handle_event(int mouseX, int mouseY, int mouseState)
