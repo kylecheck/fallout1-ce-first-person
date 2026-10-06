@@ -766,3 +766,10 @@ First-person attack mode can now initiate native Fallout combat directly from th
 The full-screen first-person overlay can now be temporarily hidden while the native options/start menu is open, then restored afterward. This establishes the pattern for letting native modal UI appear above first person instead of being trapped behind the overlay.
 
 The equipped first-person weapon viewmodel is now the first textured presentation element moved out of the CPU framebuffer. Its original indexed Fallout inventory art is converted through the active game palette into an SDL GPU texture, cached, and scaled/composited by the GPU immediately before present. The world floor/walls/billboards are still software-rendered at this stage, so this is an architectural migration step rather than the large performance win; the next GPU work should target the expensive world passes, beginning with the floor and structural geometry.
+
+
+## Dedicated first-person mode state and floor migration bridge
+
+First-person MOVE / INTERACT / ATTACK state is now stored independently from Fallout's legacy mouse-mode state. This prevents the native pre-combat cursor rules from silently removing ATTACK mode. First-person left-click handling now routes directly through that dedicated state: ATTACK can start native combat on the center-reticle critter target, while INTERACT uses the same live-object use/examine paths as before.
+
+While the world renderer is being migrated to the GPU, the software perspective floor now samples one authoritative projection lookup per 2x2 output block instead of per pixel. This reduces the most expensive current floor loop by roughly four times while preserving the established world-to-isometric mapping and leaving picking/combat coordinates unchanged. This is a temporary performance bridge, not the final GPU floor implementation.
