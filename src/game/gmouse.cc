@@ -619,7 +619,9 @@ void gmouse_bk_process()
             gmouse_3d_off();
             gmouse_set_cursor(MOUSE_CURSOR_ARROW);
 
-            if (gmouse_3d_current_mode >= 2 && !isInCombat()) {
+            if (!first_person_is_enabled()
+                && gmouse_3d_current_mode >= 2
+                && !isInCombat()) {
                 gmouse_3d_set_mode(GAME_MOUSE_MODE_MOVE);
             }
         }
