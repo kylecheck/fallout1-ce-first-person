@@ -948,3 +948,65 @@ use an exit or ladder. Also hold/release the stick around inventory and nested
 Options/Load; the world must not move behind the UI or retain a stale target.
 For Deck, bind F8 to a spare Steam Input button; its menu can then be operated
 with the trackpad/click or arrow/Enter bindings. Existing bindings are unchanged.
+
+## Native Deck/gamepad layout
+
+The game now polls one SDL2 game controller from the central input pump, so
+buttons continue to work in synchronous native inventory/dialogue/menu loops.
+The thumbsticks and buttons share that controller. A controller exposing paddles
+is preferred if both raw and virtual devices are available. Gameplay commands
+are queued into Fallout's normal input loop rather than executing game actions
+from an SDL callback. `FALLOUT_FP_GAMEPAD=0` disables the new button/pointer
+mapping for legacy Steam keyboard/mouse layouts (analog first-person sticks
+remain available).
+
+| Input | First-person world | Action menu / native UI |
+| --- | --- | --- |
+| A | Interact at reticle without changing selected mode | Confirm action menu; mouse click/hold in original screens |
+| B | Options | Back/cancel |
+| X / Y | Inventory / Pip-Boy | Original screens own their input |
+| L1 / R1 | Switch hands / cycle native weapon attack type | No gameplay shortcut behind UI |
+| LT / RT | Cycle mode / execute reticle action once per press | RT click/hold in native pointer UI |
+| Left / right stick | Established native movement / camera | Right stick moves the original UI pointer |
+| D-pad | Unassigned in the world | Arrows with 350 ms initial, 120 ms held repeat |
+| View/Select | Action menu (enable FP first from top-down) | Close/cancel |
+| Menu/Start | Options | Enter confirmation |
+| Right-stick click (R3) | Toggle first person | No toggle behind modal UI |
+| L4 / R4 / L5 / R5, if exposed | Action menu / reload / end turn / toggle view | L4 closes action menu; other shortcuts suppressed |
+
+SDL2's Steam Deck mapping uses Paddle1=R4, Paddle2=L4, Paddle3=R5, Paddle4=L5
+(verified against SDL2's Deck HID driver). A Steam virtual controller may lack
+paddles entirely; the game tests capabilities and shows the appropriate hints.
+View/Select and R3 provide access to the same actions without custom rear-button
+mapping, with reload/end turn available through the action menu. The game does
+not modify the user's Steam configuration, claim a Steam AppID, or ship the
+Steamworks SDK. It cannot force Steam to expose physical grips hidden by its
+virtual-controller layout. Trackpads remain Steam/OS mouse inputs; the native
+right-stick pointer plus A/RT also supports original UI without a mouse trackpad.
+
+One-time setup for this native mode: apply Steam's standard **Gamepad** template
+to the existing Fallout First Person shortcut, replacing the earlier keyboard
+bindings. Keep ordinary gamepad buttons/triggers/sticks/D-pad. Old keyboard
+bindings must be removed to avoid contradictory actions; application code cannot
+identify whether a keyboard event came from Steam Input or a real keyboard.
+Launch the same shortcut after each rebuild. To use trackpad mouse, retain that
+input source only, or use a gamepad template that supplies it.
+
+Input transitions suppress every already-held button/trigger until released.
+Opening inventory while A/RT is held cannot click/drag an item accidentally;
+confirming a menu cannot immediately interact with the world underneath. Focus
+loss releases the emulated mouse, and regain/reconnection requires release
+before any held button becomes active. World triggers have 18000/12000 activation
+and release thresholds; holding RT does not repeatedly attack or move. Native
+UI A/RT stays held for inventory dragging, combined with physical mouse buttons
+through the normal mouse device path. Native gameplay/AP/script rules still own
+the resulting actions.
+
+Validation: binding tests cover the agreed standard/rear-button layout, trigger
+hysteresis, held press suppression, D-pad repeat, modal transitions and reset.
+An actual SDL virtual controller fixture tests central command delivery, menu
+confirmation, merged native click/hold/release, right-stick pointer motion,
+focus loss/regain and disconnect. The existing production gameplay fixture
+passes AP/turn/modal/pick/skill checks. Modified translation units compile with
+SDL2 headers. Deck/Steam Input integration and proprietary-data UI flows still
+require the next device test.

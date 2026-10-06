@@ -1,4 +1,5 @@
 #include "game/first_person.h"
+#include "game/gamepad.h"
 #include "game/first_person_gpu.h"
 #include "game/first_person_world_gpu.h"
 #include "game/first_person_projection.h"
@@ -149,6 +150,7 @@ static bool gFirstPersonEnabled = false;
 static FirstPersonFrameRequest gFirstPersonScene;
 static bool gFirstPersonOverlaySuspended = false;
 static int gFirstPersonModalDepth = 0;
+static bool gFirstPersonActionMenuActive = false;
 static char gFirstPersonNotice[512] = {};
 static Uint64 gFirstPersonNoticeUntil = 0;
 static int gFirstPersonMode = GAME_MOUSE_MODE_MOVE;
@@ -440,6 +442,8 @@ void first_person_resume_overlay()
     }
 }
 
+bool first_person_action_menu_active() { return gFirstPersonActionMenuActive; }
+
 void first_person_action_menu()
 {
     if (!first_person_world_input_allowed()) return;
@@ -474,6 +478,7 @@ void first_person_action_menu()
     const int win = win_add((scr_size.lrx + 1 - w) / 2, (scr_size.lry + 1 - h) / 2,
         w, h, colorTable[0], WINDOW_MODAL | WINDOW_MOVE_ON_TOP);
     if (win == -1) { text_font(oldFont); return; }
+    gFirstPersonActionMenuActive = true;
     const int previousCursor = gmouse_get_cursor();
     const bool restoreBackground = map_disable_bk_processes();
     gmouse_set_cursor(MOUSE_CURSOR_ARROW);
@@ -493,7 +498,7 @@ void first_person_action_menu()
             if (i == selected) win_box(win, x, y, x + 248, y + rowHeight - 1, colorTable[992]);
             win_print(win, commands[i].label, 240, x + 4, y + 5, colorTable[992]);
         }
-        win_print(win, "Arrows: select   Enter: use   Esc/F8: close", w - 16, 8, h - 22, colorTable[992]);
+        win_print(win, "D-pad/Arrows: select  A/Enter: use  B/Esc: back", w - 16, 8, h - 22, colorTable[992]);
         win_draw(win);
         const int input = get_input();
         if (input == KEY_ESCAPE || input == KEY_F8) break;
@@ -506,6 +511,7 @@ void first_person_action_menu()
         sharedFpsLimiter.throttle();
     }
     win_delete(win);
+    gFirstPersonActionMenuActive = false;
     if (restoreBackground) map_enable_bk_processes();
     gmouse_set_cursor(previousCursor);
     text_font(oldFont);
@@ -565,6 +571,7 @@ void first_person_update()
         return;
     }
 
+    gFirstPersonController = gamepad_controller();
     first_person_update_controller_move();
 
     if (first_person_update_controller_look()) {
@@ -633,28 +640,7 @@ static bool first_person_update_controller_look()
         return false;
     }
 
-    if ((SDL_WasInit(SDL_INIT_GAMECONTROLLER) & SDL_INIT_GAMECONTROLLER) == 0) {
-        if (SDL_InitSubSystem(SDL_INIT_GAMECONTROLLER) != 0) {
-            return false;
-        }
-    }
-
-    if (gFirstPersonController == nullptr
-        || !SDL_GameControllerGetAttached(gFirstPersonController)) {
-        if (gFirstPersonController != nullptr) {
-            SDL_GameControllerClose(gFirstPersonController);
-            gFirstPersonController = nullptr;
-        }
-
-        for (int index = 0; index < SDL_NumJoysticks(); index++) {
-            if (SDL_IsGameController(index)) {
-                gFirstPersonController = SDL_GameControllerOpen(index);
-                if (gFirstPersonController != nullptr) {
-                    break;
-                }
-            }
-        }
-    }
+    gFirstPersonController = gamepad_controller();
 
     const Uint64 now = SDL_GetTicks64();
     if (gFirstPersonControllerTicks == 0) {
@@ -2988,7 +2974,7 @@ static void first_person_render_now()
             : action == INTERFACE_ITEM_ACTION_SECONDARY_AIMING ? " / SECONDARY AIMED"
             : action == INTERFACE_ITEM_ACTION_SECONDARY ? " / SECONDARY"
             : action == INTERFACE_ITEM_ACTION_PRIMARY ? " / PRIMARY" : " / USE ITEM";
-        std::snprintf(modeLine, sizeof(modeLine), "MODE: %s%s  F8: ACTIONS%s", modeName,
+        std::snprintf(modeLine, sizeof(modeLine), "MODE: %s%s  View/L4: ACTIONS%s", modeName,
             attackName,
             isInCombat() ? ((intface_is_enabled() && (combat_state & COMBAT_STATE_0x02)) ? "  YOUR TURN" : "  ENEMY TURN") : "");
 
@@ -3173,6 +3159,23 @@ static void first_person_render_now()
             }
         }
 
+        text_font(oldFont);
+    }
+
+    if (gamepad_controller() != nullptr) {
+        const int oldFont = text_curr();
+        text_font(101);
+        const int lineHeight = text_height();
+        const int hintY = std::max(0, height - lineHeight * 3 - 28);
+        const int hintWidth = std::min(width, 570);
+        buf_fill(buffer + hintY * width, hintWidth, lineHeight * 2 + 4, width, colorTable[0]);
+        text_to_buf(buffer + (hintY + 2) * width + 4,
+            "A: interact  RT: action  LT: mode  X: inventory  Y: Pip-Boy",
+            hintWidth - 8, width, colorTable[992]);
+        text_to_buf(buffer + (hintY + lineHeight + 2) * width + 4,
+            gamepad_has_paddles() ? "L4/View: actions  R4: reload  L5: end turn  R5/R3: view"
+                : "View: actions/reload/end turn  R3: view  LB: hand  RB: attack type",
+            hintWidth - 8, width, colorTable[992]);
         text_font(oldFont);
     }
 

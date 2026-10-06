@@ -26,6 +26,7 @@ private:
 bool first_person_world_input_allowed();
 void first_person_move(int rotation);
 void first_person_action_menu();
+bool first_person_action_menu_active();
 void first_person_notify(const char* message);
 void first_person_suspend_overlay();
 void first_person_resume_overlay();

@@ -1,4 +1,5 @@
 #include "game/game.h"
+#include "game/gamepad_bindings.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -489,6 +490,12 @@ int game_handle_input(int eventCode, bool isInCombatMode)
     }
 
     switch (eventCode) {
+    case GAMEPAD_INTERACT:
+        gmouse_first_person_activate(true);
+        break;
+    case GAMEPAD_RETICLE_ACTION:
+        gmouse_first_person_activate(false);
+        break;
     case KEY_F8:
         if (first_person_world_input_allowed()) first_person_action_menu();
         break;

@@ -114,6 +114,7 @@ void gmouse_3d_synch_item_highlight();
 void gmouse_remove_item_outline(Object* object);
 
 void gameMouseRefreshImmediately();
+void gmouse_first_person_activate(bool interact);
 
 } // namespace fallout
 

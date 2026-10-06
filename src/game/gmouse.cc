@@ -855,6 +855,22 @@ void gmouse_bk_process()
 }
 
 // 0x443AA0
+static bool gFirstPersonForceInteract = false;
+
+void gmouse_first_person_activate(bool interact)
+{
+    if (!first_person_world_input_allowed()) return;
+    Rect rect;
+    if (win_get_rect(first_person_window(), &rect) != 0) return;
+    const bool previousEdge = gmouse_clicked_on_edge;
+    gmouse_clicked_on_edge = false;
+    gFirstPersonForceInteract = interact;
+    gmouse_handle_event(rect.ulx + rectGetWidth(&rect) / 2,
+        rect.uly + rectGetHeight(&rect) / 2, MOUSE_EVENT_LEFT_BUTTON_UP);
+    gFirstPersonForceInteract = false;
+    gmouse_clicked_on_edge = previousEdge;
+}
+
 void gmouse_handle_event(int mouseX, int mouseY, int mouseState)
 {
     if (!gmouse_initialized) {
@@ -906,7 +922,7 @@ void gmouse_handle_event(int mouseX, int mouseY, int mouseState)
             // Resolve the click against the current camera/object scene even
             // if animation dirtied it after the previous presentation.
             first_person_flush_render();
-            const int firstPersonMode = first_person_mode();
+            const int firstPersonMode = gFirstPersonForceInteract ? GAME_MOUSE_MODE_ARROW : first_person_mode();
             if (firstPersonMode == GAME_MOUSE_MODE_CROSSHAIR) {
                 if (intface_current_action() == INTERFACE_ITEM_ACTION_RELOAD) {
                     intface_use_item();

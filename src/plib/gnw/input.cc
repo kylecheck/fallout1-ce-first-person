@@ -1,4 +1,5 @@
 #include "plib/gnw/input.h"
+#include "game/gamepad.h"
 
 #include <limits.h>
 #include <stdio.h>
@@ -141,6 +142,7 @@ int GNW_input_init(int use_msec_timer)
         return -1;
     }
 
+    gamepad_init();
     GNW95_build_key_map();
     GNW95_clear_time_stamps();
 
@@ -165,6 +167,7 @@ int GNW_input_init(int use_msec_timer)
 // 0x4B3390
 void GNW_input_exit()
 {
+    gamepad_shutdown();
     // NOTE: Uninline.
     GNW95_input_exit();
     GNW_mouse_exit();
@@ -1138,6 +1141,7 @@ void GNW95_process_message()
         }
     }
 
+    gamepad_update(GNW95_isActive && !kb_is_disabled());
     touch_process_gesture();
 
     if (GNW95_isActive && !kb_is_disabled()) {
