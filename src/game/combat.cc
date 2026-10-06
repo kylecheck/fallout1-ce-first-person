@@ -2265,12 +2265,14 @@ static int combat_turn(Object* a1, bool a2)
                 game_ui_enable();
                 gmouse_3d_refresh();
 
-                if (gcsd != NULL) {
-                    combat_attack_this(gcsd->defender);
+                if (!a2) {
+                    // Establish the player's turn before the requested opening
+                    // attack. Loaded combat state can have this bit cleared.
+                    combat_state |= 0x02;
                 }
 
-                if (!a2) {
-                    combat_state |= 0x02;
+                if (gcsd != NULL) {
+                    combat_attack_this(gcsd->defender);
                 }
 
                 intface_end_buttons_enable();
@@ -4405,7 +4407,7 @@ static int get_called_shot_location(Object* critter, int* hit_location, int hit_
 }
 
 // 0x423C2C
-int combat_check_bad_shot(Object* attacker, Object* defender, int hitMode, bool aiming)
+int combat_check_bad_shot(Object* attacker, Object* defender, int hitMode, bool aiming, bool checkActionPoints)
 {
     Object* weapon;
     int attack_type;
@@ -4428,7 +4430,7 @@ int combat_check_bad_shot(Object* attacker, Object* defender, int hitMode, bool 
         }
     }
 
-    if (item_w_mp_cost(attacker, hitMode, aiming) > attacker->data.critter.combat.ap) {
+    if (checkActionPoints && item_w_mp_cost(attacker, hitMode, aiming) > attacker->data.critter.combat.ap) {
         return COMBAT_BAD_SHOT_NOT_ENOUGH_AP;
     }
 

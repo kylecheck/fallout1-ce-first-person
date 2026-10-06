@@ -47,7 +47,9 @@ void apply_damage(Attack* attack, bool animated);
 void combat_display(Attack* attack);
 void combat_anim_begin();
 void combat_anim_finished();
-int combat_check_bad_shot(Object* attacker, Object* defender, int hitMode, bool aiming);
+// Preview can omit current-turn AP before combat has initialized a turn.
+// Actual attacks use the default AP check.
+int combat_check_bad_shot(Object* attacker, Object* defender, int hitMode, bool aiming, bool checkActionPoints = true);
 bool combat_to_hit(Object* target, int* accuracy);
 void combat_attack_this(Object* a1);
 void combat_outline_on();

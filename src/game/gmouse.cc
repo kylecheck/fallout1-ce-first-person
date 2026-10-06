@@ -900,6 +900,9 @@ void gmouse_handle_event(int mouseX, int mouseY, int mouseState)
 
     if ((mouseState & MOUSE_EVENT_LEFT_BUTTON_UP) != 0) {
         if (first_person_is_enabled()) {
+            // Resolve the click against the current camera/object scene even
+            // if animation dirtied it after the previous presentation.
+            first_person_flush_render();
             const int firstPersonMode = first_person_mode();
             if (firstPersonMode == GAME_MOUSE_MODE_CROSSHAIR) {
                 Object* target = object_under_mouse(

@@ -239,7 +239,7 @@ bool first_person_world_gpu_begin(int w,int h,int horizon,unsigned char sky,unsi
     const GLfloat background[4]={sky/255.0f,0,0,0}, depth=1.0f; const GLuint zero[4]={0,0,0,0};
     pClearBufferfv(GL_COLOR,0,background); pClearBufferuiv(GL_COLOR,1,zero); pClearBufferuiv(GL_COLOR,2,zero); pClearBufferfv(GL_DEPTH,0,&depth);
     const GLfloat groundColor[4]={ground/255.0f,0,0,0};
-    pEnable(GL_SCISSOR_TEST); pScissor(0,0,w,h-horizon); pClearBufferfv(GL_COLOR,0,groundColor); pDisable(GL_SCISSOR_TEST);
+    pEnable(GL_SCISSOR_TEST); pScissor(0,0,w,std::clamp(h-horizon,0,h)); pClearBufferfv(GL_COLOR,0,groundColor); pDisable(GL_SCISSOR_TEST);
     const GLenum sceneOutputs[3]={GL_COLOR_ATTACHMENT0,GL_COLOR_ATTACHMENT1,GL_NONE}; pDrawBuffers(3,sceneOutputs);
     pUseProgram(program); pUniform2f(sizeUniform,static_cast<float>(w),static_cast<float>(h));
     pActiveTexture(GL_TEXTURE0); pPixelStorei(GL_UNPACK_ALIGNMENT,1); pPixelStorei(GL_PACK_ALIGNMENT,1);

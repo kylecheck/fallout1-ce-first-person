@@ -45,6 +45,9 @@ int main(){
     bool visible=false;
     for(int i=0;i<1024;i++) { if(ids[i]==41) visible=true; }
     assert(visible);
+    assert(first_person_world_gpu_begin(32,32,-40,3,4));
+    assert(first_person_world_gpu_read(c.data(),d.data(),ids.data(),p.data()));
+    for(int i=0;i<1024;i++) assert(c[i]==4 && ids[i]==0 && p[i]==0);
     first_person_world_gpu_shutdown();
     SDL_setenv("FALLOUT_FP_SOFTWARE","1",1);
     assert(!first_person_world_gpu_begin(32,32,16,3,4));

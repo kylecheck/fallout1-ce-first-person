@@ -1,6 +1,8 @@
 #include "game/first_person.h"
 #include "game/first_person_gpu.h"
 #include "game/first_person_world_gpu.h"
+#include "game/first_person_projection.h"
+#include "game/first_person_frame.h"
 #include "game/first_person_wall.h"
 #include "game/first_person_doorway.h"
 #include "game/first_person_material.h"
@@ -139,6 +141,8 @@ static FirstPersonWeaponPose first_person_weapon_pose(int hitMode)
 }
 
 static bool gFirstPersonEnabled = false;
+static FirstPersonFrameRequest gFirstPersonScene;
+static bool gFirstPersonOverlaySuspended = false;
 static int gFirstPersonMode = GAME_MOUSE_MODE_MOVE;
 static constexpr double kFirstPersonEyeHeight = 0.74;
 static int gFirstPersonWindow = -1;
@@ -257,6 +261,8 @@ int first_person_window()
 void first_person_toggle()
 {
     gFirstPersonEnabled = !gFirstPersonEnabled;
+    gFirstPersonScene.request();
+    gFirstPersonOverlaySuspended = false;
 
     if (gFirstPersonEnabled) {
         if (gFirstPersonWindow == -1) {
@@ -400,6 +406,7 @@ int first_person_mode()
 void first_person_suspend_overlay()
 {
     if (gFirstPersonEnabled && gFirstPersonWindow != -1) {
+        gFirstPersonOverlaySuspended = true;
         win_hide(gFirstPersonWindow);
     }
 }
@@ -407,6 +414,7 @@ void first_person_suspend_overlay()
 void first_person_resume_overlay()
 {
     if (gFirstPersonEnabled && gFirstPersonWindow != -1) {
+        gFirstPersonOverlaySuspended = false;
         win_show(gFirstPersonWindow);
         first_person_render();
     }
@@ -493,16 +501,7 @@ static void first_person_update_controller_move()
 
 static int first_person_horizon(int width, int height)
 {
-    constexpr double kPi = 3.14159265358979323846;
-    const double focal = width * 0.70;
-    const double pitchRadians = gFirstPersonPitchDegrees * kPi / 180.0;
-    const int baseHorizon = height * 43 / 100;
-    const int shifted = baseHorizon
-        + static_cast<int>(std::lround(focal * std::tan(pitchRadians)));
-
-    // Keep enough framebuffer above and below the horizon for the software
-    // floor/wall projection even at the pitch limits.
-    return std::clamp(shifted, height / 12, height * 11 / 12);
+    return first_person_projected_horizon(width, height, gFirstPersonPitchDegrees);
 }
 
 static bool first_person_update_controller_look()
@@ -590,11 +589,11 @@ static bool first_person_update_controller_look()
     }
 
     // SDL's right-stick Y axis is negative when pushed up. Treat that as
-    // positive camera pitch. Pitch deliberately stays modest because Fallout's
-    // maps have no true ceiling/floor geometry above and below the play plane.
+    // positive camera pitch. The downward horizon may leave the viewport so
+    // nearby floor-level critters can reach the center reticle.
     constexpr double kPitchDegreesPerSecond = 180.0;
     constexpr double kPitchUpLimitDegrees = 18.0;
-    constexpr double kPitchDownLimitDegrees = 40.0;
+    constexpr double kPitchDownLimitDegrees = 55.0;
     gFirstPersonPitchDegrees = std::clamp(
         gFirstPersonPitchDegrees - pitchAxis * kPitchDegreesPerSecond * dt,
         -kPitchDownLimitDegrees,
@@ -901,7 +900,20 @@ static void first_person_dump_map()
     }
 }
 
+static void first_person_render_now();
+
 void first_person_render()
+{
+    gFirstPersonScene.request();
+}
+
+void first_person_flush_render()
+{
+    if (!gFirstPersonScene.take(gFirstPersonEnabled, gFirstPersonOverlaySuspended)) return;
+    first_person_render_now();
+}
+
+static void first_person_render_now()
 {
     const int viewWindow = first_person_window();
     if (!gFirstPersonEnabled || obj_dude == nullptr || viewWindow == -1) {
@@ -945,8 +957,9 @@ void first_person_render()
     const int gridColor = colorTable[992];
 
     const int horizon = first_person_horizon(width, height);
-    buf_fill(buffer, width, horizon, width, sky);
-    buf_fill(buffer + horizon * width, width, height - horizon, width, ground);
+    const int backgroundSplit = first_person_background_split(height, horizon);
+    buf_fill(buffer, width, backgroundSplit, width, sky);
+    buf_fill(buffer + backgroundSplit * width, width, height - backgroundSplit, width, ground);
 
     static const bool debugWalls = std::getenv("FALLOUT_FP_WALL_DEBUG") != nullptr;
     const bool gpuWorld = !debugWalls && first_person_world_gpu_begin(
@@ -1099,7 +1112,7 @@ void first_person_render()
         }
     }
     constexpr int kFloorSampleStep = 2;
-    for (int screenY = horizon + 1; !gpuWorld && screenY < height; screenY += kFloorSampleStep) {
+    for (int screenY = std::max(0, horizon + 1); !gpuWorld && screenY < height; screenY += kFloorSampleStep) {
         const double cameraZ = focal * kEyeHeight / (screenY - horizon);
         if (cameraZ < kNearPlane || cameraZ > kFarPlane) {
             continue;
@@ -2339,7 +2352,7 @@ void first_person_render()
         if (!first_person_world_gpu_read(gpuPixels.data(), gpuDepth.data(), gpuIds.data(), gpuProxies.data())) {
             // The backend disables itself before returning. Re-render once
             // using the established software path instead of showing a partial frame.
-            first_person_render();
+            first_person_render_now();
             return;
         }
         constexpr double n = 0.45, f = 128.0;
@@ -2505,7 +2518,8 @@ void first_person_render()
                             obj_dude,
                             hoverPick.object,
                             hitMode,
-                            aiming);
+                            aiming,
+                            isInCombat());
                         if (badShot == COMBAT_BAD_SHOT_OK) {
                             const int accuracy = determine_to_hit(
                                 obj_dude,
@@ -2856,7 +2870,8 @@ void first_person_render()
             const bool haveAttack =
                 intface_get_attack(&hitMode, &aiming) == 0;
 
-            const int ap = obj_dude->data.critter.combat.ap;
+            const int ap = isInCombat() ? obj_dude->data.critter.combat.ap
+                : stat_level(obj_dude, STAT_MAXIMUM_ACTION_POINTS);
             int apCost = -1;
             int ammo = -1;
             int ammoMax = -1;
@@ -2887,7 +2902,8 @@ void first_person_render()
                         obj_dude,
                         firstPersonHoverObject,
                         hitMode,
-                        aiming);
+                        aiming,
+                        isInCombat());
 
                     const char* reason = nullptr;
                     switch (badShot) {

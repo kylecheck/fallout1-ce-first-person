@@ -16,7 +16,9 @@ int first_person_mode();
 void first_person_suspend_overlay();
 void first_person_resume_overlay();
 bool first_person_controller_move_active();
+// Request a scene refresh; repeated native dirty rects coalesce until present.
 void first_person_render();
+void first_person_flush_render();
 // Camera heading is independent of native character facing during pathing.
 // Heading uses 24 steps around the circle (15 degrees each); rotation returns
 // the nearest native Fallout hex direction for movement/pathing.

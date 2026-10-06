@@ -846,3 +846,45 @@ Deck verification should cover the vault and cave floors, both sides of doors,
 transparent windows, moving rats, target selection behind walls, opening native
 menus, and leaving/reentering first person. The terminal logs successful world
 GPU initialization or software fallback, making the selected backend observable.
+
+
+## Fresh-combat preview, close-ground aim and scene scheduling
+
+Fresh characters can have zero current combat AP before their first turn. The
+first-person preview formerly passed that value into native bad-shot checking,
+showing NO AP outside combat even though an attack can initiate a native turn.
+`combat_check_bad_shot` now accepts an optional AP-check flag, enabled by default
+for every existing actual attack. Only first-person previews omit it outside
+combat. Native ammo, range, death, crippled-arm and obstruction rules still
+apply; no AP or native object state is temporarily changed for a preview. The
+HUD uses maximum native AP for the pre-combat preview and current AP in combat.
+
+The native player-turn flag is established before its requested initial attack,
+which avoids silently rejecting that attack when a loaded combat state has the
+flag cleared. The original native attack, turn initialization and AP consumption
+remain authoritative. Whether these fixes explain every symptom in the cave
+still requires testing from the fresh save.
+
+Looking down previously clamped the horizon to the viewport, making nearby
+floor-level targets impossible to center. The horizon can now leave the screen,
+with downward pitch extended to 55 degrees. Background fill bounds and software
+floor loop starts are clamped separately to avoid negative buffer offsets. GPU
+ground-clear scissoring also clamps safely. Both picking and scene projection
+use this same horizon. World coordinates and wall lattice are unchanged.
+
+Repeated native map dirty rectangles now request a world refresh rather than
+immediately doing full GPU rasterization/readback each time. Presentation flushes
+one pending scene; a world click also flushes pending work to avoid stale picks.
+A suspended options overlay keeps pending work without rendering beneath it.
+This specifically reduces redundant work in scenes with multiple independently
+moving critters; no measured Deck frame-rate gain is claimed yet.
+
+Validation: modified translation units compile with SDL headers. Regression
+checks cover near-ground center-ray reach at 1280x800, 800x600 and 640x480,
+bounded background fills, coalescing 100 requests into one scene, modal deferral
+and click-flush behavior. The GPU depth/transparency/picking/context checks pass.
+An isolated compiled copy of the native bad-shot function verifies fresh AP-zero
+previews still enforce ammo/range/death and actual attacks still enforce AP.
+Integration test: load the untouched cave save, select ATTACK before any combat,
+center a nearby rat and click; compare movement responsiveness outside combat
+with the small vault and verify close-ground aim and options-menu return.
