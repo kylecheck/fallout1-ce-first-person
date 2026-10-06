@@ -757,3 +757,12 @@ A dedicated GPU composition hook now runs after Fallout CE uploads its software 
 Fallout's background mouse process normally forces any cursor mode at or above CROSSHAIR back to MOVE when the physical mouse is not over the native map window and combat has not yet started. First person now bypasses that legacy reset, allowing its explicit MOVE -> INTERACT -> ATTACK cycle to remain stable before combat begins.
 
 The legacy KEY_ARROW_UP and KEY_ARROW_DOWN movement paths are also suppressed while native left-stick movement is active, matching the existing left/right guard. This prevents Steam Input from sending both joystick intent and legacy arrow events that can queue extra forward/backward hex movement after the stick is released.
+
+
+## Native combat initiation, options overlay, and first textured GPU element
+
+First-person attack mode can now initiate native Fallout combat directly from the center-reticle target. Outside combat, a crosshair click builds the same native combat-start structure used by Fallout's combat system and enters combat with the selected live critter as the initial defender; once combat is active, normal `combat_attack_this` handling remains unchanged.
+
+The full-screen first-person overlay can now be temporarily hidden while the native options/start menu is open, then restored afterward. This establishes the pattern for letting native modal UI appear above first person instead of being trapped behind the overlay.
+
+The equipped first-person weapon viewmodel is now the first textured presentation element moved out of the CPU framebuffer. Its original indexed Fallout inventory art is converted through the active game palette into an SDL GPU texture, cached, and scaled/composited by the GPU immediately before present. The world floor/walls/billboards are still software-rendered at this stage, so this is an architectural migration step rather than the large performance win; the next GPU work should target the expensive world passes, beginning with the floor and structural geometry.
