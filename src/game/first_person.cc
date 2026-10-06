@@ -2816,8 +2816,9 @@ void first_person_render()
     // First-person world interaction is camera-centered. Do not draw a second
     // free mouse pointer over the scene; native modal windows still own the
     // real pointer when they are shown above the first-person overlay.
-    draw_line(buffer, width, width / 2 - 7, height / 2, width / 2 + 7, height / 2, crosshairColor);
-    draw_line(buffer, width, width / 2, height / 2 - 7, width / 2, height / 2 + 7, crosshairColor);
+    // The center reticle is now composed in the SDL GPU pass after the
+    // software framebuffer upload. Keep the world renderer focused on scene
+    // generation while we migrate more first-person drawing to the GPU.
 
     if (viewWindow != display_win) {
         win_draw(viewWindow);
