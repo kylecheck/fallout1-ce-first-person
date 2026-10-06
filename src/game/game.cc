@@ -553,7 +553,11 @@ int game_handle_input(int eventCode, bool isInCombatMode)
         break;
     case KEY_UPPERCASE_M:
     case KEY_LOWERCASE_M:
-        gmouse_3d_toggle_mode();
+        if (first_person_is_enabled()) {
+            first_person_cycle_mode();
+        } else {
+            gmouse_3d_toggle_mode();
+        }
         break;
     case KEY_UPPERCASE_B:
     case KEY_LOWERCASE_B:
