@@ -59,20 +59,28 @@ static SDL_Texture* first_person_gpu_texture(
 
     std::vector<std::uint32_t> rgba(static_cast<size_t>(width) * height, 0);
     SDL_Palette* palette = gSdlSurface->format->palette;
+    SDL_PixelFormat* rgbaFormat = SDL_AllocFormat(SDL_PIXELFORMAT_RGBA8888);
+    if (rgbaFormat == nullptr) {
+        return nullptr;
+    }
+
     for (int index = 0; index < width * height; index++) {
         const unsigned char pixel = pixels[index];
         if (pixel == 0) {
-            rgba[index] = 0;
+            rgba[index] = SDL_MapRGBA(rgbaFormat, 0, 0, 0, 0);
             continue;
         }
 
         const SDL_Color color = palette->colors[pixel];
-        rgba[index] =
-            (static_cast<std::uint32_t>(color.r) << 24)
-            | (static_cast<std::uint32_t>(color.g) << 16)
-            | (static_cast<std::uint32_t>(color.b) << 8)
-            | 0xFFu;
+        rgba[index] = SDL_MapRGBA(
+            rgbaFormat,
+            color.r,
+            color.g,
+            color.b,
+            255);
     }
+
+    SDL_FreeFormat(rgbaFormat);
 
     SDL_Texture* texture = SDL_CreateTexture(
         gSdlRenderer,
