@@ -359,15 +359,16 @@ void first_person_turn(int steps)
 
 bool first_person_controller_move_active()
 {
-    if (!gFirstPersonEnabled || gFirstPersonController == nullptr) {
+    SDL_GameController* pad = gamepad_controller();
+    if (!gFirstPersonEnabled || pad == nullptr) {
         return false;
     }
 
     const Sint16 rawX = SDL_GameControllerGetAxis(
-        gFirstPersonController,
+        pad,
         SDL_CONTROLLER_AXIS_LEFTX);
     const Sint16 rawY = SDL_GameControllerGetAxis(
-        gFirstPersonController,
+        pad,
         SDL_CONTROLLER_AXIS_LEFTY);
 
     const double x = rawX >= 0 ? rawX / 32767.0 : rawX / 32768.0;
@@ -566,12 +567,12 @@ void first_person_update()
         gFirstPersonNoticeUntil = 0;
         first_person_render();
     }
+    gFirstPersonController = gamepad_controller();
     if (!first_person_world_input_allowed()) {
         gFirstPersonControllerTicks = 0;
         return;
     }
 
-    gFirstPersonController = gamepad_controller();
     first_person_update_controller_move();
 
     if (first_person_update_controller_look()) {
@@ -3162,6 +3163,15 @@ static void first_person_render_now()
         text_font(oldFont);
     }
 
+    {
+        const int oldFont = text_curr();
+        text_font(101);
+        const int diagnosticY = text_height() * 4 + 24;
+        buf_fill(buffer + diagnosticY * width, width, text_height() + 4, width, colorTable[0]);
+        text_to_buf(buffer + (diagnosticY + 2) * width + 4, gamepad_diagnostic(),
+            width - 8, width, colorTable[992]);
+        text_font(oldFont);
+    }
     if (gamepad_controller() != nullptr) {
         const int oldFont = text_curr();
         text_font(101);

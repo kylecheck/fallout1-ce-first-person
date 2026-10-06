@@ -232,6 +232,7 @@ void process_bk()
 
     v1 = kb_getch();
     if (v1 != -1) {
+        gamepad_note_key(v1);
         GNW_add_input_buffer(v1);
         return;
     }
@@ -1091,6 +1092,7 @@ void GNW95_process_message()
     KeyboardData keyboardData;
     SDL_Event e;
     while (SDL_PollEvent(&e)) {
+        gamepad_handle_event(e);
         switch (e.type) {
         case SDL_MOUSEMOTION:
         case SDL_MOUSEBUTTONDOWN:

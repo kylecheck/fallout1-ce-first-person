@@ -16,6 +16,7 @@ bool first_person_is_enabled() { return fp; }
 bool first_person_world_input_allowed() { return fp && top == 5; }
 bool first_person_action_menu_active() { return menu; }
 int first_person_window() { return 5; }
+void first_person_render() {}
 int win_get_top_win(int, int) { return top; }
 int screenGetWidth() { return 1280; }
 int screenGetHeight() { return 800; }
@@ -39,7 +40,12 @@ int main()
     assert(index >= 0);
     SDL_Joystick* joy = SDL_JoystickOpen(index);
     assert(joy != nullptr);
-    auto tick = [&]() { SDL_JoystickUpdate(); gamepad_update(true); };
+    auto tick = [&]() {
+        SDL_JoystickUpdate();
+        SDL_Event event;
+        while (SDL_PollEvent(&event)) gamepad_handle_event(event);
+        gamepad_update(true);
+    };
     tick();
     assert(gamepad_controller() != nullptr && gamepad_has_paddles());
     // SDL virtual trigger axes initialize at 0 (half travel); release first.
@@ -78,6 +84,37 @@ int main()
     SDL_JoystickDetachVirtual(index); tick();
     assert(gamepad_controller() == nullptr);
     assert(dxinput_get_mouse_state(&mouse) && !mouse.buttons[0]);
+    // Regression: Steam's working device can coexist with an inactive pad
+    // advertising grips. Capability alone must never steal stick/button input.
+    desc.name = "Dormant paddle controller";
+    const int dormantIndex = SDL_JoystickAttachVirtualEx(&desc);
+    SDL_Joystick* dormant = SDL_JoystickOpen(dormantIndex);
+    desc.name = "Working Steam gamepad";
+    desc.button_mask = (1u << SDL_CONTROLLER_BUTTON_MISC1) - 1;
+    const int liveIndex = SDL_JoystickAttachVirtualEx(&desc);
+    SDL_Joystick* live = SDL_JoystickOpen(liveIndex);
+    assert(dormant != nullptr && live != nullptr);
+    menu = false; top = 5;
+    tick();
+    SDL_JoystickSetVirtualAxis(dormant, SDL_CONTROLLER_AXIS_TRIGGERLEFT, -32768);
+    SDL_JoystickSetVirtualAxis(dormant, SDL_CONTROLLER_AXIS_TRIGGERRIGHT, -32768);
+    SDL_JoystickSetVirtualAxis(live, SDL_CONTROLLER_AXIS_TRIGGERLEFT, -32768);
+    SDL_JoystickSetVirtualAxis(live, SDL_CONTROLLER_AXIS_TRIGGERRIGHT, -32768);
+    tick();
+    commands.clear();
+    SDL_JoystickSetVirtualAxis(live, SDL_CONTROLLER_AXIS_RIGHTX, 30000);
+    tick();
+    assert(SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(gamepad_controller())) == SDL_JoystickInstanceID(live));
+    assert(SDL_GameControllerGetAxis(gamepad_controller(), SDL_CONTROLLER_AXIS_RIGHTX) == 30000);
+    SDL_JoystickSetVirtualButton(live, SDL_CONTROLLER_BUTTON_X, 1);
+    tick();
+    assert(commands.size() == 1 && commands.back() == KEY_LOWERCASE_I);
+    tick(); assert(commands.size() == 1);
+    gamepad_note_key(KEY_F11); tick();
+    assert(std::string(gamepad_diagnostic()).find("KEY:") != std::string::npos);
+    SDL_JoystickClose(live); SDL_JoystickClose(dormant);
+    SDL_JoystickDetachVirtual(liveIndex); SDL_JoystickDetachVirtual(dormantIndex);
+    tick();
     gamepad_shutdown(); SDL_Quit();
-    std::cout << "PASS SDL virtual gamepad commands, menu confirmation, native click/drag, pointer and disconnect\n";
+    std::cout << "PASS SDL virtual gamepad commands, menu confirmation, native click/drag, pointer, disconnect and multiple-controller selection\n";
 }

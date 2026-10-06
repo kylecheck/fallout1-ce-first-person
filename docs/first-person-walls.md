@@ -1010,3 +1010,31 @@ focus loss/regain and disconnect. The existing production gameplay fixture
 passes AP/turn/modal/pick/skill checks. Modified translation units compile with
 SDL2 headers. Deck/Steam Input integration and proprietary-data UI flows still
 require the next device test.
+
+## Steam controller selection regression
+
+The initial native-input pass preferred any controller advertising rear buttons.
+That can select an inactive raw device while Steam supplies usable axes/buttons
+through a second virtual device, losing the previously working camera input.
+Capability is no longer used to decide input ownership. SDL-recognized devices
+remain open, the initial device follows enumeration order, and significant stick
+motion or a genuine button press selects the device producing that event. Small
+axis noise and trigger-release events do not select a different controller.
+The sticks and native buttons continue to share the selected active device.
+Hotplug/focus/menu held-input suppression remains, and an intentional button
+press selecting another device is retained rather than discarded.
+
+A temporary visible PAD diagnostic shows selected device, WORLD/MAP/ACTIONS/UI/
+BLOCKED context, right-stick axis values (1024-unit steps), held-button mask,
+last received native keyboard code, and rear-button availability. It is useful
+for distinguishing controller input from legacy Steam keyboard/mouse bindings.
+The game still cannot recover buttons Steam does not expose or erase a user's
+Steam layout. When GRIPS=no, use View/Select for actions and R3 for view toggle.
+
+Validation: the SDL virtual-controller test now reproduces a dormant controller
+with paddles alongside a working controller without paddles. Input selects the
+working device; right-stick axis values reach the shared controller and X emits
+inventory exactly once. The original button/menu/click/drag/focus/disconnect,
+binding-hysteresis and AP/modal fixtures pass; modified source compiles. Actual
+Deck verification should first move the right stick while filming the PAD line,
+then press View/Select, A, B, X and R3 with the standard Gamepad template active.
