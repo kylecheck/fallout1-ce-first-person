@@ -750,3 +750,10 @@ The renderer also reuses its large depth and pick buffers across frames instead 
 First person now owns its world-mode cycle instead of delegating to Fallout's stock mouse-mode toggle. The first-person sequence is MOVE -> INTERACT -> ATTACK -> MOVE, so ATTACK remains available even before native combat has begun; native combat itself still starts only when the player actually attacks a target.
 
 A dedicated GPU composition hook now runs after Fallout CE uploads its software framebuffer to SDL and before `SDL_RenderPresent`. The center reticle has been moved into this GPU pass as the first visible migration step, with mode-aware coloring and suppression while a native modal window owns the center of the screen. This does not yet move the world renderer off the CPU, but it establishes the render stage where floor, structural walls, billboards, weapon presentation, and HUD can be migrated incrementally without replacing Fallout's simulation or the existing first-person coordinate model.
+
+
+## Pre-combat attack-mode persistence and duplicate move suppression
+
+Fallout's background mouse process normally forces any cursor mode at or above CROSSHAIR back to MOVE when the physical mouse is not over the native map window and combat has not yet started. First person now bypasses that legacy reset, allowing its explicit MOVE -> INTERACT -> ATTACK cycle to remain stable before combat begins.
+
+The legacy KEY_ARROW_UP and KEY_ARROW_DOWN movement paths are also suppressed while native left-stick movement is active, matching the existing left/right guard. This prevents Steam Input from sending both joystick intent and legacy arrow events that can queue extra forward/backward hex movement after the stick is released.
