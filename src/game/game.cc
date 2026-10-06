@@ -592,7 +592,14 @@ int game_handle_input(int eventCode, bool isInCombatMode)
         // options
         if (intface_is_enabled()) {
             gsound_play_sfx_file("ib1p1xx1");
+            const bool resumeFirstPerson = first_person_is_enabled();
+            if (resumeFirstPerson) {
+                first_person_suspend_overlay();
+            }
             do_options();
+            if (resumeFirstPerson) {
+                first_person_resume_overlay();
+            }
         }
         break;
     case KEY_UPPERCASE_P:
