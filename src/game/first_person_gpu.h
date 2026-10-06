@@ -19,7 +19,8 @@ void first_person_gpu_submit_indexed_sprite(
     int destinationX,
     int destinationY,
     int destinationWidth,
-    int destinationHeight);
+    int destinationHeight,
+    bool flipHorizontal = false);
 void first_person_gpu_present();
 
 } // namespace fallout

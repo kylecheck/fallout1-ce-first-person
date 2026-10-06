@@ -30,6 +30,7 @@ struct FirstPersonGpuSprite {
     int destinationY;
     int destinationWidth;
     int destinationHeight;
+    bool flipHorizontal;
 };
 
 static std::vector<FirstPersonGpuTexture> gFirstPersonGpuTextures;
@@ -124,7 +125,8 @@ void first_person_gpu_submit_indexed_sprite(
     int destinationX,
     int destinationY,
     int destinationWidth,
-    int destinationHeight)
+    int destinationHeight,
+    bool flipHorizontal)
 {
     if (pixels == nullptr
         || sourceWidth <= 0
@@ -150,6 +152,7 @@ void first_person_gpu_submit_indexed_sprite(
         destinationY,
         destinationWidth,
         destinationHeight,
+        flipHorizontal,
     });
 }
 
@@ -191,7 +194,8 @@ void first_person_gpu_present()
             sprite.destinationWidth,
             sprite.destinationHeight,
         };
-        SDL_RenderCopy(gSdlRenderer, texture, &source, &destination);
+        SDL_RenderCopyEx(gSdlRenderer, texture, &source, &destination, 0.0, nullptr,
+            sprite.flipHorizontal ? SDL_FLIP_HORIZONTAL : SDL_FLIP_NONE);
     }
 
     Uint8 r = 220;

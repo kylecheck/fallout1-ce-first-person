@@ -2830,7 +2830,8 @@ static void first_person_render_now()
                                 left,
                                 top,
                                 drawWidth,
-                                drawHeight);
+                                drawHeight,
+                                true);
                         }
                     }
 
