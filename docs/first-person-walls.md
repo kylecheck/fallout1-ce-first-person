@@ -743,3 +743,10 @@ Wall materials are now cached across first-person frames instead of being re-ext
 All first-person world modes now use the center reticle as the authoritative pointer. Move targeting, inspect/use object selection, combat target selection, hover feedback, and the visible crosshair therefore reference one camera-centered point instead of allowing the hidden/free mouse cursor to drift independently. The separate first-person mouse pointer overlay has been removed; native modal interfaces still retain normal mouse ownership when they appear above the first-person view.
 
 The renderer also reuses its large depth and pick buffers across frames instead of reallocating them for every camera update. Hover-object bounds are recorded during billboard projection and reused for highlighting, replacing the previous full-frame pixel scan used to rediscover a selected object's screen bounds. These changes are aimed specifically at reducing large-map camera hitching without changing world geometry or native movement/combat authority.
+
+
+## Dedicated first-person mode cycle and GPU composition bridge
+
+First person now owns its world-mode cycle instead of delegating to Fallout's stock mouse-mode toggle. The first-person sequence is MOVE -> INTERACT -> ATTACK -> MOVE, so ATTACK remains available even before native combat has begun; native combat itself still starts only when the player actually attacks a target.
+
+A dedicated GPU composition hook now runs after Fallout CE uploads its software framebuffer to SDL and before `SDL_RenderPresent`. The center reticle has been moved into this GPU pass as the first visible migration step, with mode-aware coloring and suppression while a native modal window owns the center of the screen. This does not yet move the world renderer off the CPU, but it establishes the render stage where floor, structural walls, billboards, weapon presentation, and HUD can be migrated incrementally without replacing Fallout's simulation or the existing first-person coordinate model.
