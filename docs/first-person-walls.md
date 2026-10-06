@@ -1066,3 +1066,27 @@ so missing grip events can also be identified.
 The SDL virtual-controller integration fixture accepts an optional output path
 and verifies actual event records, context changes, dispatched actions, mouse
 transitions, controller mappings, and session boundaries.
+
+
+### Downward-look framebuffer safety
+
+The sparse depth guides still use Fallout's unclipped software `draw_line`,
+including during GPU rendering. At negative camera pitch, the off-axis horizon
+can put their projected rows above the viewport. These rows are now skipped
+before the native drawing call, preventing writes before the framebuffer.
+Wall/world coordinates and the existing camera projection are unchanged.
+
+The projection regression invokes the production guide helper and the real
+`draw_line` across the full pitch range at 1280x800, 800x600, and 640x480. Guard
+regions remain untouched; restoring the original unclipped drawing fails it.
+Compile with the native drawing implementation (section GC removes unrelated
+legacy graphics routines):
+
+```sh
+g++ -std=c++17 -Wall -Wextra -Werror -Wno-unused-parameter -ffunction-sections -fdata-sections -fsanitize=address,undefined -Isrc tests/first_person_projection_test.cc src/plib/gnw/grbuf.cc -Wl,--gc-sections -o /tmp/fp-projection-test
+ASAN_OPTIONS=detect_leaks=0 /tmp/fp-projection-test
+```
+
+Address/undefined-behavior checks remain enabled; leak detection is disabled
+for the constrained test environment. A device retest must confirm that this
+fix resolves the reported crash; the input log has no crash stack trace.

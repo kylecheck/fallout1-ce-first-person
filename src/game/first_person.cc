@@ -1354,10 +1354,7 @@ static void first_person_render_now()
 
     // Retain sparse depth guides for this build. They make it easy to see
     // whether the newly projected floor agrees with our established geometry.
-    for (int depth = 1; depth <= 8; depth++) {
-        const int y = horizon + static_cast<int>((height - horizon) * (1.0 - 1.0 / (1.0 + depth * 0.55)));
-        draw_line(buffer, width, 0, y, width - 1, y, gridColor);
-    }
+    first_person_draw_depth_guides(buffer, width, height, horizon, gridColor);
 
     // Debug geometry uses the same clipping/depth path as textured walls.
     auto debugWallColor = [](FirstPersonWallKind kind) {
