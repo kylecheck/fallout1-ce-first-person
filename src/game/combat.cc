@@ -1,3 +1,4 @@
+#include "game/first_person.h"
 #include "game/combat.h"
 
 #include <limits.h>
@@ -4220,6 +4221,7 @@ static void draw_loc(int input, int color)
 // 0x42382C
 static int get_called_shot_location(Object* critter, int* hit_location, int hit_mode)
 {
+    FirstPersonModalScope firstPersonModal;
     call_target = critter;
 
     int calledShotWindowX = (screenGetWidth() - CALLED_SHOT_WINDOW_WIDTH) / 2;

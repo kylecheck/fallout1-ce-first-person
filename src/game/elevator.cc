@@ -1,3 +1,4 @@
+#include "game/first_person.h"
 #include "game/elevator.h"
 
 #include <ctype.h>
@@ -240,6 +241,7 @@ static unsigned char* grphbmp[ELEVATOR_FRM_COUNT];
 // 0x437E8C
 int elevator_select(int elevator, int* mapPtr, int* elevationPtr, int* tilePtr)
 {
+    FirstPersonModalScope firstPersonModal;
     if (elevator < 0 || elevator >= ELEVATOR_COUNT) {
         return -1;
     }

@@ -35,6 +35,7 @@
 #include "game/perk.h"
 #include "game/pipboy.h"
 #include "game/proto.h"
+#include "game/protinst.h"
 #include "game/queue.h"
 #include "game/roll.h"
 #include "game/scripts.h"
@@ -488,6 +489,24 @@ int game_handle_input(int eventCode, bool isInCombatMode)
     }
 
     switch (eventCode) {
+    case KEY_F8:
+        if (first_person_world_input_allowed()) first_person_action_menu();
+        break;
+    case KEY_UPPERCASE_E:
+    case KEY_LOWERCASE_E:
+        if (first_person_world_input_allowed()) {
+            first_person_flush_render();
+            Object* target = object_under_mouse(-1, false, map_elevation);
+            if (target != nullptr && obj_examine(obj_dude, target) == -1) obj_look_at(obj_dude, target);
+        }
+        break;
+    case KEY_UPPERCASE_R:
+    case KEY_LOWERCASE_R:
+        if (first_person_world_input_allowed()) {
+            intface_reload_current();
+            first_person_render();
+        }
+        break;
     case -20:
         if (intface_is_enabled()) {
             intface_use_item();
@@ -549,6 +568,7 @@ int game_handle_input(int eventCode, bool isInCombatMode)
         if (intface_is_enabled()) {
             gsound_play_sfx_file("ib1p1xx1");
             intface_toggle_item_state();
+            first_person_render();
         }
         break;
     case KEY_UPPERCASE_M:
@@ -565,6 +585,7 @@ int game_handle_input(int eventCode, bool isInCombatMode)
         if (intface_is_enabled()) {
             gsound_play_sfx_file("ib1p1xx1");
             intface_toggle_items(true);
+            first_person_render();
         }
         break;
     case KEY_UPPERCASE_C:
@@ -925,11 +946,7 @@ int game_handle_input(int eventCode, bool isInCombatMode)
             // native left stick is held. Suppress the duplicate key path so a
             // single forward stick press cannot queue extra hex moves.
             if (!first_person_controller_move_active()) {
-                const int destination = tile_num_in_direction(obj_dude->tile, first_person_rotation(), 1);
-                if (destination >= 0 && register_begin(ANIMATION_REQUEST_RESERVED) == 0) {
-                    register_object_move_to_tile(obj_dude, destination, obj_dude->elevation, -1, 0);
-                    register_end();
-                }
+                first_person_move(first_person_rotation());
             }
         } else {
             map_scroll(0, -1);
@@ -940,11 +957,7 @@ int game_handle_input(int eventCode, bool isInCombatMode)
             if (!first_person_controller_move_active()) {
                 // Backpedal one hex without changing the viewing direction.
                 const int reverseRotation = (first_person_rotation() + ROTATION_COUNT / 2) % ROTATION_COUNT;
-                const int destination = tile_num_in_direction(obj_dude->tile, reverseRotation, 1);
-                if (destination >= 0 && register_begin(ANIMATION_REQUEST_RESERVED) == 0) {
-                    register_object_move_to_tile(obj_dude, destination, obj_dude->elevation, -1, 0);
-                    register_end();
-                }
+                first_person_move(reverseRotation);
             }
         } else {
             map_scroll(0, 1);
@@ -1235,6 +1248,7 @@ static void game_help()
 // 0x43D274
 int game_quit_with_confirm()
 {
+    FirstPersonModalScope firstPersonModal;
     bool isoWasEnabled = map_disable_bk_processes();
 
     bool gameMouseWasVisible;

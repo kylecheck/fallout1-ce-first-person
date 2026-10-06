@@ -888,3 +888,63 @@ previews still enforce ammo/range/death and actual attacks still enforce AP.
 Integration test: load the untouched cave save, select ATTACK before any combat,
 center a nearby rat and click; compare movement responsiveness outside combat
 with the small vault and verify close-ground aim and options-menu return.
+
+## Native gameplay-loop foundation
+
+Deck testing of cf66c0a reports a substantial responsiveness gain in the cave
+and vault, with attack initiation working before the first combat. This pass
+builds on that renderer; wall geometry, projection, depth/pick ownership and
+rat simulation speed are unchanged.
+
+- **F8 action menu:** clickable native modal command list over the first-person
+  scene. Arrows select, Enter executes, Escape/F8 closes. The menu pauses native
+  map background processes and restores their previous enabled state. Commands
+  are queued after closing, so Space/end turn and Enter/end combat reach the
+  native combat input loop. End combat can still be refused by native rules.
+- **Combat:** R reloads the active hand through `intface_use_item`, preserving
+  its native ammunition, AP and sound handling. B switches hands; N cycles the
+  native primary/secondary/aimed/reload choices. ATTACK with reload selected
+  executes reload. The HUD names the selected action and displays turn state.
+  Native aimed attacks retain the body-part selector and its own hit chances.
+- **Interaction:** M/right-click still cycles MOVE/INTERACT/ATTACK. Reticle
+  prompts identify pickup, fixed-container open/loot/close, talk, corpse loot,
+  scenery use, door open/close and native locked state. E examines the target.
+  Existing native actions own approach, AP, locks, scripts and transitions.
+  Portable containers retain native pickup behavior. A reversed art-null check
+  in native fixed-container animation scheduling is corrected (successful art
+  locks now provide the action frame and are released; failures skip it).
+- **Skills/items:** native skill and use-item targeting take precedence over
+  the three first-person modes. Pick targets still come from the GPU/CPU
+  object buffers and pass to the existing skill/item action branches. F8 also
+  exposes use-held-item, inventory, skills, Pip-Boy, character and automap.
+- **Feedback:** native display messages appear for six seconds in the viewport,
+  including lock, range, AP, examination and script messages. This first pass
+  shows the latest message on one line; the original native log is retained.
+- **Modal ownership:** scoped, nested overlay suspension covers inventory,
+  loot, use-inventory-on, dialogue, aimed-shot selection, skills, character,
+  Pip-Boy, automap, options/pause/confirmation, save/load and elevator UI.
+  Loading and map transitions suspend the scene while objects are replaced;
+  final resume clears cached picks, resets controller timing and redraws.
+  Original native screens retain their presentation, then return to first person.
+- **Movement:** analog and arrow movement share the same native one-hex request,
+  passing current AP plus bonus movement in combat. They reject input while
+  native UI owns the view, the interface is disabled, or it is an enemy turn.
+  Native animation/pathing still charges the actual movement cost.
+
+Validation: changed translation units pass syntax compilation with SDL2 headers
+(existing legacy integer/pointer-cast warnings remain in actions.cc). A compiled
+engine fixture exercises the actual renderer input/modal functions: free-roam
+movement, combat AP/bonus allowance, zero-AP rejection, enemy-turn/disabled-UI
+blocking, nested modal return, stale pick clearing, and native skill/item mode
+precedence. Wall, doorway, material, projection/coalescing and offscreen OpenGL
+color/depth/transparency/picking regressions pass. No proprietary game-data
+integration run or complete CMake build is available here; Deck verification is
+still required, especially script-driven dialogue, ladders and map exits.
+
+Test cycle: attack a rat -> N to an aimed mode -> select a body part -> R reload
+-> Space/end turn -> finish combat -> M to INTERACT -> loot the corpse -> use a
+fixed container/door -> try a locked target with Skills/Lockpick -> save/load ->
+use an exit or ladder. Also hold/release the stick around inventory and nested
+Options/Load; the world must not move behind the UI or retain a stale target.
+For Deck, bind F8 to a spare Steam Input button; its menu can then be operated
+with the trackpad/click or arrow/Enter bindings. Existing bindings are unchanged.

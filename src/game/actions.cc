@@ -1163,7 +1163,7 @@ int action_get_an_object(Object* critter, Object* item)
         int actionFrame;
         CacheEntry* cacheEntry;
         Art* art = art_ptr_lock(fid, &cacheEntry);
-        if (art == NULL) {
+        if (art != NULL) {
             actionFrame = art_frame_action_frame(art);
             art_ptr_unlock(cacheEntry);
         } else {

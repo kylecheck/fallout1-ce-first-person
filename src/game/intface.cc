@@ -1427,6 +1427,24 @@ int intface_toggle_item_state()
     return 0;
 }
 
+int intface_current_action()
+{
+    return interfaceWindow == -1 ? INTERFACE_ITEM_ACTION_DEFAULT : itemButtonItems[itemCurrentItem].action;
+}
+
+void intface_reload_current()
+{
+    if (!intface_is_enabled() || interfaceWindow == -1) return;
+    InterfaceItemState* state = &itemButtonItems[itemCurrentItem];
+    if (!state->isWeapon || state->isDisabled || state->item == nullptr
+        || item_w_max_ammo(state->item) <= 0) return;
+    const int previous = state->action;
+    state->action = INTERFACE_ITEM_ACTION_RELOAD;
+    intface_use_item();
+    state->action = previous;
+    intface_redraw_items();
+}
+
 // 0x454D20
 void intface_use_item()
 {

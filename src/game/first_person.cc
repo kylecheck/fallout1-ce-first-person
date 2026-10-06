@@ -17,6 +17,10 @@
 
 #include <SDL.h>
 
+#include "game/game.h"
+#include "plib/gnw/input.h"
+#include "plib/gnw/kb.h"
+#include "plib/gnw/button.h"
 #include "game/art.h"
 #include "game/anim.h"
 #include "game/combat.h"
@@ -29,6 +33,7 @@
 #include "game/tile.h"
 #include "game/object.h"
 #include "game/proto.h"
+#include "game/protinst.h"
 #include "game/stat.h"
 #include "plib/color/color.h"
 #include "plib/gnw/gnw.h"
@@ -143,6 +148,9 @@ static FirstPersonWeaponPose first_person_weapon_pose(int hitMode)
 static bool gFirstPersonEnabled = false;
 static FirstPersonFrameRequest gFirstPersonScene;
 static bool gFirstPersonOverlaySuspended = false;
+static int gFirstPersonModalDepth = 0;
+static char gFirstPersonNotice[512] = {};
+static Uint64 gFirstPersonNoticeUntil = 0;
 static int gFirstPersonMode = GAME_MOUSE_MODE_MOVE;
 static constexpr double kFirstPersonEyeHeight = 0.74;
 static int gFirstPersonWindow = -1;
@@ -263,6 +271,7 @@ void first_person_toggle()
     gFirstPersonEnabled = !gFirstPersonEnabled;
     gFirstPersonScene.request();
     gFirstPersonOverlaySuspended = false;
+    gFirstPersonModalDepth = 0;
 
     if (gFirstPersonEnabled) {
         if (gFirstPersonWindow == -1) {
@@ -400,29 +409,159 @@ void first_person_cycle_mode()
 
 int first_person_mode()
 {
-    return gFirstPersonEnabled ? gFirstPersonMode : gmouse_3d_get_mode();
+    // Native inventory/skill commands own their temporary targeting modes.
+    const int nativeMode = gmouse_3d_get_mode();
+    if (!gFirstPersonEnabled || nativeMode >= GAME_MOUSE_MODE_CROSSHAIR) return nativeMode;
+    return gFirstPersonMode;
 }
 
 void first_person_suspend_overlay()
 {
     if (gFirstPersonEnabled && gFirstPersonWindow != -1) {
-        gFirstPersonOverlaySuspended = true;
-        win_hide(gFirstPersonWindow);
+        if (gFirstPersonModalDepth++ == 0) {
+            gFirstPersonOverlaySuspended = true;
+            win_hide(gFirstPersonWindow);
+        }
     }
 }
 
 void first_person_resume_overlay()
 {
     if (gFirstPersonEnabled && gFirstPersonWindow != -1) {
+        if (gFirstPersonModalDepth == 0 || --gFirstPersonModalDepth != 0) return;
         gFirstPersonOverlaySuspended = false;
+        gFirstPersonPicks.clear();
+        gFirstPersonInteractionPicks.clear();
+        gFirstPersonControllerTicks = 0;
+        gFirstPersonMoveTicks = 0;
+        intface_hide();
         win_show(gFirstPersonWindow);
         first_person_render();
     }
 }
 
+void first_person_action_menu()
+{
+    if (!first_person_world_input_allowed()) return;
+    first_person_flush_render();
+    // A native modal window above the frozen view; command execution happens
+    // after closing it, through the same input loop as the original hotkeys.
+    struct Command { const char* label; int key; };
+    static const Command commands[] = {
+        { "End turn [Space]", KEY_SPACE },
+        { "End combat [Enter]", KEY_RETURN },
+        { "Reload [R]", KEY_LOWERCASE_R },
+        { "Switch hand [B]", KEY_LOWERCASE_B },
+        { "Attack mode / aimed [N]", KEY_LOWERCASE_N },
+        { "Use held item", -20 },
+        { "Inventory [I]", KEY_LOWERCASE_I },
+        { "Skills [S]", KEY_LOWERCASE_S },
+        { "Pip-Boy [P]", KEY_LOWERCASE_P },
+        { "Character [C]", KEY_LOWERCASE_C },
+        { "Automap [Tab]", KEY_TAB },
+        { "Examine target [E]", KEY_LOWERCASE_E },
+        { "Save [F4]", KEY_F4 },
+        { "Load [F5]", KEY_F5 },
+        { "Options [Esc]", KEY_ESCAPE },
+        { "Move / interact / attack [M]", KEY_LOWERCASE_M },
+    };
+    constexpr int count = sizeof(commands) / sizeof(commands[0]);
+    const int oldFont = text_curr();
+    text_font(101);
+    const int w = 520;
+    const int rowHeight = std::max(24, text_height() + 10);
+    const int h = 70 + 8 * rowHeight;
+    const int win = win_add((scr_size.lrx + 1 - w) / 2, (scr_size.lry + 1 - h) / 2,
+        w, h, colorTable[0], WINDOW_MODAL | WINDOW_MOVE_ON_TOP);
+    if (win == -1) { text_font(oldFont); return; }
+    const int previousCursor = gmouse_get_cursor();
+    const bool restoreBackground = map_disable_bk_processes();
+    gmouse_set_cursor(MOUSE_CURSOR_ARROW);
+    for (int i = 0; i < count; i++) {
+        win_register_button(win, 8 + (i / 8) * 256, 38 + (i % 8) * rowHeight,
+            250, rowHeight, -1, -1, -1, 2000 + i, nullptr, nullptr, nullptr, 0);
+    }
+    int selected = 0;
+    int command = -1;
+    while (game_user_wants_to_quit == 0) {
+        sharedFpsLimiter.mark();
+        win_fill(win, 0, 0, w, h, colorTable[0]);
+        win_print(win, "FIRST PERSON ACTIONS", w - 16, 8, 8, colorTable[992]);
+        for (int i = 0; i < count; i++) {
+            const int x = 8 + (i / 8) * 256;
+            const int y = 38 + (i % 8) * rowHeight;
+            if (i == selected) win_box(win, x, y, x + 248, y + rowHeight - 1, colorTable[992]);
+            win_print(win, commands[i].label, 240, x + 4, y + 5, colorTable[992]);
+        }
+        win_print(win, "Arrows: select   Enter: use   Esc/F8: close", w - 16, 8, h - 22, colorTable[992]);
+        win_draw(win);
+        const int input = get_input();
+        if (input == KEY_ESCAPE || input == KEY_F8) break;
+        if (input == KEY_ARROW_UP) selected = (selected + count - 1) % count;
+        if (input == KEY_ARROW_DOWN) selected = (selected + 1) % count;
+        if (input == KEY_ARROW_LEFT || input == KEY_ARROW_RIGHT) selected = (selected + 8) % count;
+        if (input == KEY_RETURN) { command = commands[selected].key; break; }
+        if (input >= 2000 && input < 2000 + count) { command = commands[input - 2000].key; break; }
+        renderPresent();
+        sharedFpsLimiter.throttle();
+    }
+    win_delete(win);
+    if (restoreBackground) map_enable_bk_processes();
+    gmouse_set_cursor(previousCursor);
+    text_font(oldFont);
+    gFirstPersonControllerTicks = 0;
+    gFirstPersonMoveTicks = 0;
+    first_person_render();
+    if (command != -1 && game_user_wants_to_quit == 0) GNW_add_input_buffer(command);
+}
+
+FirstPersonModalScope::FirstPersonModalScope()
+    : active_(first_person_is_enabled())
+{
+    if (active_) first_person_suspend_overlay();
+}
+
+FirstPersonModalScope::~FirstPersonModalScope()
+{
+    if (active_) first_person_resume_overlay();
+}
+
+bool first_person_world_input_allowed()
+{
+    return gFirstPersonEnabled && !gFirstPersonOverlaySuspended
+        && obj_dude != nullptr && intface_is_enabled()
+        && win_get_top_win((scr_size.lrx + 1) / 2, (scr_size.lry + 1) / 2) == gFirstPersonWindow
+        && (!isInCombat() || (combat_state & COMBAT_STATE_0x02) != 0);
+}
+
+void first_person_notify(const char* message)
+{
+    if (!gFirstPersonEnabled || message == nullptr) return;
+    std::snprintf(gFirstPersonNotice, sizeof(gFirstPersonNotice), "%s", message);
+    gFirstPersonNoticeUntil = SDL_GetTicks64() + 6000;
+    first_person_render();
+}
+
+void first_person_move(int rotation)
+{
+    if (!first_person_world_input_allowed()) return;
+    const int ap = isInCombat() ? obj_dude->data.critter.combat.ap + combat_free_move : -1;
+    if (ap == 0) return;
+    const int destination = tile_num_in_direction(obj_dude->tile, rotation, 1);
+    if (destination >= 0 && register_begin(ANIMATION_REQUEST_RESERVED) == 0) {
+        register_object_move_to_tile(obj_dude, destination, obj_dude->elevation, ap, 0);
+        register_end();
+    }
+}
+
 void first_person_update()
 {
-    if (!gFirstPersonEnabled) {
+    if (gFirstPersonNoticeUntil != 0 && SDL_GetTicks64() >= gFirstPersonNoticeUntil) {
+        gFirstPersonNoticeUntil = 0;
+        first_person_render();
+    }
+    if (!first_person_world_input_allowed()) {
+        gFirstPersonControllerTicks = 0;
         return;
     }
 
@@ -479,24 +618,8 @@ static void first_person_update_controller_move()
     int rotation = static_cast<int>(std::lround(desiredHeading / 4.0));
     rotation = ((rotation % ROTATION_COUNT) + ROTATION_COUNT) % ROTATION_COUNT;
 
-    const int destination = tile_num_in_direction(obj_dude->tile, rotation, 1);
-    if (destination < 0) {
-        return;
-    }
-
-    // Preserve Fallout's native animation, pathing, collision, scripts, and
-    // movement semantics. The analog stick supplies only camera-relative
-    // intent; it never moves the player through continuous world coordinates.
-    if (register_begin(ANIMATION_REQUEST_RESERVED) == 0) {
-        register_object_move_to_tile(
-            obj_dude,
-            destination,
-            obj_dude->elevation,
-            -1,
-            0);
-        register_end();
-        gFirstPersonMoveTicks = now;
-    }
+    first_person_move(rotation);
+    gFirstPersonMoveTicks = now;
 }
 
 static int first_person_horizon(int width, int height)
@@ -2859,7 +2982,15 @@ static void first_person_render_now()
         }
 
         char modeLine[160];
-        std::snprintf(modeLine, sizeof(modeLine), "MODE: %s", modeName);
+        const int action = intface_current_action();
+        const char* attackName = action == INTERFACE_ITEM_ACTION_RELOAD ? " / RELOAD"
+            : action == INTERFACE_ITEM_ACTION_PRIMARY_AIMING ? " / PRIMARY AIMED"
+            : action == INTERFACE_ITEM_ACTION_SECONDARY_AIMING ? " / SECONDARY AIMED"
+            : action == INTERFACE_ITEM_ACTION_SECONDARY ? " / SECONDARY"
+            : action == INTERFACE_ITEM_ACTION_PRIMARY ? " / PRIMARY" : " / USE ITEM";
+        std::snprintf(modeLine, sizeof(modeLine), "MODE: %s%s  F8: ACTIONS%s", modeName,
+            attackName,
+            isInCombat() ? ((intface_is_enabled() && (combat_state & COMBAT_STATE_0x02)) ? "  YOUR TURN" : "  ENEMY TURN") : "");
 
         char combatLine[256] = { 0 };
         const bool attackPresentation =
@@ -2982,6 +3113,30 @@ static void first_person_render_now()
             }
         }
 
+        if (!attackPresentation && firstPersonHoverObject != nullptr) {
+            Object* target = firstPersonHoverObject;
+            const char* verb = "EXAMINE";
+            switch (FID_TYPE(target->fid)) {
+            case OBJ_TYPE_ITEM:
+                verb = item_get_type(target) == ITEM_TYPE_CONTAINER && !proto_action_can_pickup(target->pid)
+                    ? (obj_is_open(target) ? "CLOSE" : "OPEN / LOOT") : "PICK UP";
+                break;
+            case OBJ_TYPE_CRITTER:
+                verb = obj_action_can_talk_to(target) ? "TALK" : "LOOT";
+                break;
+            case OBJ_TYPE_SCENERY:
+                verb = proto_action_can_use(target->pid) ? "USE" : "EXAMINE";
+                break;
+            }
+            if (FID_TYPE(target->fid) == OBJ_TYPE_SCENERY && obj_is_openable(target)) {
+                verb = obj_is_open(target) ? "CLOSE" : "OPEN";
+            }
+            const char* name = object_name(target);
+            std::snprintf(combatLine, sizeof(combatLine), "%s: %s%s%s", verb,
+                name != nullptr ? name : "Object",
+                obj_is_lockable(target) && obj_is_locked(target) ? " [LOCKED]" : "",
+                mode == GAME_MOUSE_MODE_MOVE ? "  [M: INTERACT]" : "");
+        }
         const int oldFont = text_curr();
         text_font(101);
         const int lineHeight = text_height();
@@ -3018,6 +3173,16 @@ static void first_person_render_now()
             }
         }
 
+        text_font(oldFont);
+    }
+
+    if (gFirstPersonNoticeUntil != 0) {
+        const int oldFont = text_curr();
+        text_font(101);
+        const int messageY = std::min(height - text_height() - 4, text_height() * 2 + 16);
+        buf_fill(buffer + messageY * width, width, text_height() + 4, width, colorTable[0]);
+        text_to_buf(buffer + (messageY + 2) * width + 4, gFirstPersonNotice,
+            width - 8, width, colorTable[992]);
         text_font(oldFont);
     }
 

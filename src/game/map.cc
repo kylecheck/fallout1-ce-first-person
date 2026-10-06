@@ -926,6 +926,7 @@ int map_load_idx(int map)
 // 0x47471C
 int map_load_file(DB_FILE* stream)
 {
+    FirstPersonModalScope firstPersonModal;
     int rc = 0;
     const char* error;
 
@@ -1257,6 +1258,7 @@ int map_check_state()
     if (map_state.map == 0) {
         return 0;
     }
+    FirstPersonModalScope firstPersonModal;
 
     gmouse_3d_off();
     gmouse_set_cursor(MOUSE_CURSOR_NONE);

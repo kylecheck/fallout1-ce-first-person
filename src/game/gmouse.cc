@@ -887,6 +887,8 @@ void gmouse_handle_event(int mouseX, int mouseY, int mouseState)
         return;
     }
 
+    if (first_person_is_enabled() && !first_person_world_input_allowed()) return;
+
     if ((mouseState & MOUSE_EVENT_RIGHT_BUTTON_DOWN) != 0) {
         if ((mouseState & MOUSE_EVENT_RIGHT_BUTTON_REPEAT) == 0) {
             if (first_person_is_enabled()) {
@@ -900,11 +902,17 @@ void gmouse_handle_event(int mouseX, int mouseY, int mouseState)
 
     if ((mouseState & MOUSE_EVENT_LEFT_BUTTON_UP) != 0) {
         if (first_person_is_enabled()) {
+            if (!first_person_world_input_allowed()) return;
             // Resolve the click against the current camera/object scene even
             // if animation dirtied it after the previous presentation.
             first_person_flush_render();
             const int firstPersonMode = first_person_mode();
             if (firstPersonMode == GAME_MOUSE_MODE_CROSSHAIR) {
+                if (intface_current_action() == INTERFACE_ITEM_ACTION_RELOAD) {
+                    intface_use_item();
+                    first_person_render();
+                    return;
+                }
                 Object* target = object_under_mouse(
                     OBJ_TYPE_CRITTER,
                     false,
@@ -933,6 +941,8 @@ void gmouse_handle_event(int mouseX, int mouseY, int mouseState)
                 if (target != NULL) {
                     switch (FID_TYPE(target->fid)) {
                     case OBJ_TYPE_ITEM:
+                        // Native pickup already routes fixed containers through
+                        // open/lock/scripts/loot and portable ones into inventory.
                         action_get_an_object(obj_dude, target);
                         break;
                     case OBJ_TYPE_CRITTER:
@@ -1458,6 +1468,7 @@ void gmouse_3d_set_mode(int mode)
     }
 
     gmouse_3d_current_mode = mode;
+    if (first_person_is_enabled()) first_person_render();
     gmouse_3d_hover_test = false;
     gmouse_3d_last_move_time = get_time();
 

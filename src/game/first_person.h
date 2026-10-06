@@ -13,6 +13,20 @@ void first_person_toggle();
 void first_person_update();
 void first_person_cycle_mode();
 int first_person_mode();
+// Scoped native UI ownership; nesting is safe (options -> load -> map).
+class FirstPersonModalScope {
+public:
+    FirstPersonModalScope();
+    ~FirstPersonModalScope();
+    FirstPersonModalScope(const FirstPersonModalScope&) = delete;
+    FirstPersonModalScope& operator=(const FirstPersonModalScope&) = delete;
+private:
+    bool active_;
+};
+bool first_person_world_input_allowed();
+void first_person_move(int rotation);
+void first_person_action_menu();
+void first_person_notify(const char* message);
 void first_person_suspend_overlay();
 void first_person_resume_overlay();
 bool first_person_controller_move_active();

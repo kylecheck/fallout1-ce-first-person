@@ -1,3 +1,4 @@
+#include "game/first_person.h"
 #include "game/options.h"
 
 #include <math.h>
@@ -380,6 +381,7 @@ static PreferenceDescription btndat[PREF_COUNT] = {
 // 0x481328
 int do_options()
 {
+    FirstPersonModalScope firstPersonModal;
     if (OptnStart() == -1) {
         debug_printf("\nOPTION MENU: Error loading option dialog data!\n");
         return -1;
@@ -614,6 +616,7 @@ static int OptnEnd()
 // 0x481974
 int PauseWindow(bool is_world_map)
 {
+    FirstPersonModalScope firstPersonModal;
     // 0x4812EC
     static const int graphicIds[PAUSE_WINDOW_FRM_COUNT] = {
         208, // charwin.frm - character editor
