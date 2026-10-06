@@ -789,3 +789,60 @@ or a proven first-combat initialization defect. Validate from a fresh load:
 cycle into ATTACK before combat, check HUD/reticle agree, target a live critter,
 and click; then repeat after combat ends. World rendering remains software;
 GPU composition currently covers the reticle and weapon texture.
+
+
+## GPU world rasterization: first complete world backend
+
+The default first-person world path now uses an offscreen OpenGL 3.3 context
+created through SDL. The existing SDL presentation renderer is retained; its
+current context is restored after each world frame. OpenGL functions are loaded
+through SDL, so this adds no separate GL linker or SDK package requirement.
+The offscreen window is hidden. Unsupported initialization or a GL frame error
+selects the established software world path automatically. Setting
+`FALLOUT_FP_SOFTWARE=1` explicitly selects that comparison/fallback path.
+Wall debug mode also uses the software path.
+
+The GPU draws native floor art, reconstructed walls/corners/lintels, structural
+doors/large scenery and live animated scenery/critter/item billboards. The CPU
+still prepares native objects, materials and the same structural segments.
+Indexed FRMs are uploaded as R8 textures with nearest sampling. Palette-index
+zero is discarded; GPU depth and R32UI owner attachments agree at opaque pixels.
+A separate depth-tested assisted-pick attachment retains billboard opaque-bound
+interaction footprints while rejecting occluded targets. Native object IDs and
+live-pointer validation remain authoritative after readback; there is no new
+collision, combat or interaction simulation.
+
+Floor geometry inverts the same existing world-to-isometric basis. Original
+`square_coord` places each FRM, and a reusable per-art mask built with native
+`square_num` ownership removes overlapping rectangular margins. The shader
+handles perspective interpolation and near-plane clipping. The floor retains
+its 36-unit far cutoff; the visible wall collector remains 48 hexes with 54
+hexes of topology evidence. Neither wall lattice nor camera movement changes.
+
+To preserve the existing native window compositor, this first backend reads
+indexed color, depth, exact IDs and assisted IDs back once per frame. It avoids
+the former CPU floor/wall/door/billboard pixel rasterizers, but synchronous
+readback and remaining CPU material/geometry preparation can still limit
+performance. No Deck FPS improvement is claimed before measurement. HUD text,
+target highlights and native modal menus remain lightweight software UI; the
+existing SDL GPU weapon and reticle composition follows the world output.
+
+Validation: compiled all modified C++ translation units with SDL headers; new
+backend and test compile with strict warnings. Executed the backend using SDL's
+offscreen GL driver: indexed color, transparency, scene depth, exact and assisted
+picking, wall occlusion, near clipping, framebuffer resize, context restoration
+and explicit software selection passed. Existing lattice/clipping, doorway and
+material regressions also passed. The full game/Deck integration still requires
+the user's SDK build and visual/input test with Fallout data.
+
+The standalone GPU check can be compiled on Linux with:
+
+```sh
+g++ -std=c++17 -Wall -Wextra -Werror -Isrc $(sdl2-config --cflags) tests/first_person_world_gpu_test.cc src/game/first_person_world_gpu.cc $(sdl2-config --libs) -o /tmp/fp-world-test
+SDL_VIDEODRIVER=offscreen /tmp/fp-world-test
+```
+
+Deck verification should cover the vault and cave floors, both sides of doors,
+transparent windows, moving rats, target selection behind walls, opening native
+menus, and leaving/reentering first person. The terminal logs successful world
+GPU initialization or software fallback, making the selected backend observable.

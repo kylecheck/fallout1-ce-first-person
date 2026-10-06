@@ -1,6 +1,7 @@
 #include "plib/gnw/svga.h"
 
 #include "game/first_person_gpu.h"
+#include "game/first_person_world_gpu.h"
 
 #include "plib/gnw/gnw.h"
 #include "plib/gnw/grbuf.h"
@@ -152,6 +153,7 @@ bool svga_init(VideoOptions* video_options)
 
 void svga_exit()
 {
+    first_person_world_gpu_shutdown();
     destroyRenderer();
 
     if (gSdlWindow != NULL) {

@@ -1,5 +1,6 @@
 #include "game/first_person.h"
 #include "game/first_person_gpu.h"
+#include "game/first_person_world_gpu.h"
 #include "game/first_person_wall.h"
 #include "game/first_person_doorway.h"
 #include "game/first_person_material.h"
@@ -947,6 +948,20 @@ void first_person_render()
     buf_fill(buffer, width, horizon, width, sky);
     buf_fill(buffer + horizon * width, width, height - horizon, width, ground);
 
+    static const bool debugWalls = std::getenv("FALLOUT_FP_WALL_DEBUG") != nullptr;
+    const bool gpuWorld = !debugWalls && first_person_world_gpu_begin(
+        width, height, horizon, static_cast<unsigned char>(sky), static_cast<unsigned char>(ground));
+    std::vector<FirstPersonPick> gpuOwners { { nullptr, -1 } };
+    auto gpuOwner = [&](Object* object) -> std::uint32_t {
+        gpuOwners.push_back({ object, object->id });
+        return static_cast<std::uint32_t>(gpuOwners.size() - 1);
+    };
+    auto gpuVertex = [](double x, double y, double z, double u, double v) {
+        return FirstPersonGpuVertex { static_cast<float>(x * z),
+            static_cast<float>(y * z), static_cast<float>(z),
+            static_cast<float>(u), static_cast<float>(v) };
+    };
+
     constexpr int kHexGridWidth = 200;
     // Visibility and structural evidence are separate. Keep enough topology
     // outside the draw radius for the six-cell bridge/material searches.
@@ -1035,8 +1050,56 @@ void first_person_render()
     // repeating the expensive world/square/art lookup for every single pixel.
     // The game is already palette/pixel-art based, so this is a useful speed
     // bridge without changing the authoritative projection or world mapping.
+    if (gpuWorld) {
+        struct FloorFace { int fid; int width; int height; std::vector<unsigned char> pixels; };
+        std::vector<FloorFace> floorFaces;
+        for (int tile = 0; tile < SQUARE_GRID_SIZE; tile++) {
+            int ix = 0, iy = 0;
+            if (square_coord(tile, &ix, &iy, map_elevation) != 0) continue;
+            // Cull before touching art. A floor FRM occupies about 3 world units.
+            const double isoDx = ix - playerIsoX, isoDy = iy - playerIsoY;
+            const double dx = (12.0 * isoDx - 16.0 * isoDy) / (kIsoXFromWorldX * 12.0 - 16.0 * kIsoYFromWorldX);
+            const double dy = (-kIsoYFromWorldX * isoDx + kIsoXFromWorldX * isoDy) / (kIsoXFromWorldX * 12.0 - 16.0 * kIsoYFromWorldX);
+            const double z = dx * forwardX + dy * forwardY;
+            if (z < -4.0 || z > kFarPlane + 4.0 || std::hypot(dx, dy) > kFarPlane + 4.0) continue;
+            const int fid = art_id(OBJ_TYPE_TILE, square[map_elevation]->field_0[tile] & 0xFFF, 0, 0, 0);
+            FirstPersonFloorArt* art = getFloorArt(fid);
+            if (!art) continue;
+            const double sx[4] = { 0.0, static_cast<double>(art->frame->width), static_cast<double>(art->frame->width), 0.0 };
+            const double sy[4] = { 0.0, 0.0, static_cast<double>(art->frame->height), static_cast<double>(art->frame->height) };
+            FirstPersonGpuVertex vertices[4];
+            for (int i = 0; i < 4; i++) {
+                const double a = isoDx + sx[i], b = isoDy + sy[i];
+                const double wx = (12.0 * a - 16.0 * b) / (kIsoXFromWorldX * 12.0 - 16.0 * kIsoYFromWorldX);
+                const double wy = (-kIsoYFromWorldX * a + kIsoXFromWorldX * b) / (kIsoXFromWorldX * 12.0 - 16.0 * kIsoYFromWorldX);
+                const double cx = wx * rightX + wy * rightY, cz = wx * forwardX + wy * forwardY;
+                vertices[i] = { static_cast<float>(width * 0.5 * cz + focal * cx),
+                    static_cast<float>(horizon * cz + focal * kEyeHeight), static_cast<float>(cz),
+                    (i == 1 || i == 2) ? 1.0f : 0.0f, (i >= 2) ? 1.0f : 0.0f };
+            }
+            // Match native square ownership rather than drawing overlapping
+            // rectangular floor FRMs as competing pieces of geometry.
+            FloorFace* face = nullptr;
+            for (auto& cached : floorFaces) {
+                if (cached.fid == fid) { face = &cached; break; }
+            }
+            if (!face) {
+                FloorFace masked { fid, art->frame->width, art->frame->height, {} };
+                masked.pixels.assign(art->pixels, art->pixels + masked.width * masked.height);
+                for (int y = 0; y < masked.height; y++) {
+                    for (int x = 0; x < masked.width; x++) {
+                        if (square_num(ix + x, iy + y, map_elevation) != tile) {
+                            masked.pixels[y * masked.width + x] = 0;
+                        }
+                    }
+                }
+                floorFaces.push_back(std::move(masked)); face = &floorFaces.back();
+            }
+            first_person_world_gpu_quad(face->pixels.data(), face->width, face->height, vertices, 0, false, static_cast<float>(kFarPlane));
+        }
+    }
     constexpr int kFloorSampleStep = 2;
-    for (int screenY = horizon + 1; screenY < height; screenY += kFloorSampleStep) {
+    for (int screenY = horizon + 1; !gpuWorld && screenY < height; screenY += kFloorSampleStep) {
         const double cameraZ = focal * kEyeHeight / (screenY - horizon);
         if (cameraZ < kNearPlane || cameraZ > kFarPlane) {
             continue;
@@ -1116,6 +1179,8 @@ void first_person_render()
         mouseY -= viewportRect.uly;
     }
 
+    int gpuHexX[6] {}, gpuHexY[6] {};
+    bool gpuHexVisible = false;
     if (targetTile >= 0) {
         double targetWorldX;
         double targetWorldY;
@@ -1150,7 +1215,12 @@ void first_person_render()
             }
         }
 
-        if (hexVisible) {
+        if (gpuWorld && hexVisible) {
+            std::copy(hexX, hexX + 6, gpuHexX);
+            std::copy(hexY, hexY + 6, gpuHexY);
+            gpuHexVisible = true;
+        }
+        if (hexVisible && !gpuWorld) {
             const int highlightColor = colorTable[31744];
             for (int corner = 0; corner < 6; corner++) {
                 const int next = (corner + 1) % 6;
@@ -1167,7 +1237,6 @@ void first_person_render()
     }
 
     // Debug geometry uses the same clipping/depth path as textured walls.
-    static const bool debugWalls = std::getenv("FALLOUT_FP_WALL_DEBUG") != nullptr;
     auto debugWallColor = [](FirstPersonWallKind kind) {
         switch (kind) {
         case FIRST_PERSON_WALL_NORTH_SOUTH:
@@ -1752,6 +1821,18 @@ void first_person_render()
                 continue;
             }
 
+            if (gpuWorld) {
+                const FirstPersonGpuVertex vertices[4] = {
+                    gpuVertex(screenAX, topAY, az, u0, 0.0),
+                    gpuVertex(screenBX, topBY, bz, u1, 0.0),
+                    gpuVertex(screenBX, bottomBY, bz, u1, wall.materialVMax),
+                    gpuVertex(screenAX, bottomAY, az, u0, wall.materialVMax),
+                };
+                first_person_world_gpu_quad(material->pixels.data(), material->width,
+                    material->height, vertices, gpuOwner(wall.object));
+                continue;
+            }
+
             const double invAz = 1.0 / az;
             const double invBz = 1.0 / bz;
             for (int screenX = minX; screenX <= maxX; screenX++) {
@@ -1978,6 +2059,18 @@ void first_person_render()
                 continue;
             }
 
+            if (gpuWorld) {
+                const FirstPersonGpuVertex vertices[4] = {
+                    gpuVertex(screenAX, topAY, az, u0, 0.0),
+                    gpuVertex(screenBX, topBY, bz, u1, 0.0),
+                    gpuVertex(screenBX, bottomBY, bz, u1, 1.0),
+                    gpuVertex(screenAX, bottomAY, az, u0, 1.0),
+                };
+                first_person_world_gpu_quad(material->pixels.data(), material->width,
+                    material->height, vertices, gpuOwner(door.object));
+                continue;
+            }
+
             const double invAz = 1.0 / az;
             const double invBz = 1.0 / bz;
             for (int screenX = minX; screenX <= maxX; screenX++) {
@@ -2179,6 +2272,30 @@ void first_person_render()
             std::min(height - 1, bottom),
         });
 
+        if (gpuWorld) {
+            const std::uint32_t owner = gpuOwner(object.object);
+            const FirstPersonGpuVertex vertices[4] = {
+                gpuVertex(left, top, object.z, 0.0, 0.0),
+                gpuVertex(left + projectedWidth, top, object.z, 1.0, 0.0),
+                gpuVertex(left + projectedWidth, bottom, object.z, 1.0, 1.0),
+                gpuVertex(left, bottom, object.z, 0.0, 1.0),
+            };
+            first_person_world_gpu_quad(pixels, frame->width, frame->height, vertices, owner);
+            if (opaqueMaxX >= opaqueMinX && opaqueMaxY >= opaqueMinY) {
+                const double x0 = left + projectedWidth * (opaqueMinX / static_cast<double>(frame->width));
+                const double x1 = left + projectedWidth * ((opaqueMaxX + 1.0) / frame->width);
+                const double y0 = top + projectedHeight * (opaqueMinY / static_cast<double>(frame->height));
+                const double y1 = top + projectedHeight * ((opaqueMaxY + 1.0) / frame->height);
+                const FirstPersonGpuVertex proxy[4] = {
+                    gpuVertex(x0, y0, object.z, 0.0, 0.0), gpuVertex(x1, y0, object.z, 1.0, 0.0),
+                    gpuVertex(x1, y1, object.z, 1.0, 1.0), gpuVertex(x0, y1, object.z, 0.0, 1.0),
+                };
+                first_person_world_gpu_quad(nullptr, 0, 0, proxy, owner, true);
+            }
+            art_ptr_unlock(cacheEntry);
+            continue;
+        }
+
         for (int screenY = std::max(0, top); screenY <= std::min(height - 1, bottom); screenY++) {
             const int sourceY = std::clamp((screenY - top) * frame->height / projectedHeight, 0, frame->height - 1);
             for (int screenX = std::max(0, left); screenX < std::min(width, left + projectedWidth); screenX++) {
@@ -2211,6 +2328,48 @@ void first_person_render()
         }
 
         art_ptr_unlock(cacheEntry);
+    }
+
+    if (gpuWorld) {
+        static std::vector<unsigned char> gpuPixels;
+        static std::vector<float> gpuDepth;
+        static std::vector<std::uint32_t> gpuIds, gpuProxies;
+        gpuPixels.resize(pixelCount); gpuDepth.resize(pixelCount);
+        gpuIds.resize(pixelCount); gpuProxies.resize(pixelCount);
+        if (!first_person_world_gpu_read(gpuPixels.data(), gpuDepth.data(), gpuIds.data(), gpuProxies.data())) {
+            // The backend disables itself before returning. Re-render once
+            // using the established software path instead of showing a partial frame.
+            first_person_render();
+            return;
+        }
+        constexpr double n = 0.45, f = 128.0;
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                const int dst = y * width + x, src = (height - 1 - y) * width + x;
+                buffer[dst] = gpuPixels[src];
+                depthBuffer[dst] = gpuDepth[src] >= 1.0f ? 1.0e30
+                    : 2.0 * f * n / (f + n - (2.0 * gpuDepth[src] - 1.0) * (f - n));
+                if (gpuIds[src] < gpuOwners.size()) gFirstPersonPicks[dst] = gpuOwners[gpuIds[src]];
+                if (gpuProxies[src] < gpuOwners.size()) gFirstPersonInteractionPicks[dst] = gpuOwners[gpuProxies[src]];
+            }
+        }
+    }
+
+    if (gpuHexVisible) {
+        const unsigned char highlight = colorTable[31744];
+        for (int edge = 0; edge < 6; edge++) {
+            const int next = (edge + 1) % 6;
+            const int steps = std::max(std::abs(gpuHexX[next] - gpuHexX[edge]),
+                std::abs(gpuHexY[next] - gpuHexY[edge]));
+            for (int step = 0; step <= steps; step++) {
+                const double t = steps > 0 ? step / static_cast<double>(steps) : 0.0;
+                const int x = static_cast<int>(std::lround(gpuHexX[edge] + t * (gpuHexX[next] - gpuHexX[edge])));
+                const int y = static_cast<int>(std::lround(gpuHexY[edge] + t * (gpuHexY[next] - gpuHexY[edge])));
+                if (y <= horizon || x < 0 || x >= width || y >= height) continue;
+                const double z = focal * kEyeHeight / (y - horizon);
+                if (z <= depthBuffer[y * width + x] + 0.05) buffer[y * width + x] = highlight;
+            }
+        }
     }
 
     Object* firstPersonHoverObject = nullptr;
