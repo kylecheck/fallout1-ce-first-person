@@ -3,6 +3,7 @@
 
 #include <limits.h>
 #include <stdio.h>
+#include <vector>
 
 #include "audio_engine.h"
 #include "platform_compat.h"
@@ -1091,8 +1092,14 @@ void GNW95_process_message()
 
     KeyboardData keyboardData;
     SDL_Event e;
+    std::vector<SDL_Event> events;
     while (SDL_PollEvent(&e)) {
+        events.push_back(e);
         gamepad_handle_event(e);
+    }
+    // Observe the complete batch before dispatch so a keyboard echo arriving
+    // just before its controller event is filtered too. Preserve dispatch order.
+    for (SDL_Event& e : events) {
         switch (e.type) {
         case SDL_MOUSEMOTION:
         case SDL_MOUSEBUTTONDOWN:
@@ -1111,6 +1118,7 @@ void GNW95_process_message()
             break;
         case SDL_KEYDOWN:
         case SDL_KEYUP:
+            if (gamepad_filter_keyboard_echo(e)) break;
             if (!kb_is_disabled()) {
                 keyboardData.key = e.key.keysym.scancode;
                 keyboardData.down = (e.key.state & SDL_PRESSED) != 0;

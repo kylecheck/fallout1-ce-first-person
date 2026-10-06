@@ -1090,3 +1090,42 @@ ASAN_OPTIONS=detect_leaks=0 /tmp/fp-projection-test
 Address/undefined-behavior checks remain enabled; leak detection is disabled
 for the constrained test environment. A device retest must confirm that this
 fix resolves the reported crash; the input log has no crash stack trace.
+
+
+### Native Deck keyboard echo filtering
+
+The Deck test log showed controller presses paired with desktop keyboard
+events: Y/Space, A/Return, B/Escape, View/Tab, d-pad/arrows, shoulders/left
+Ctrl or Alt, and rear grips/Page Up, Shift, Page Down, or GUI. These could
+dispatch two different actions from one physical press.
+
+Native controls now suppress these specific keyboard events when their
+timestamps are within 40 ms of the corresponding controller press from an
+opened SDL controller whose name contains `Steam Deck`. The input loop
+observes an entire event batch before dispatching it, so either arrival order
+works. Suppressed key repeats and the paired release are consumed as well,
+including across menu/context changes. Keyboard events without a matching
+Deck press remain available. Generic controllers and disabled native controls
+do not activate this filter.
+
+SDL2 does not identify the originating keyboard, so an actual keyboard key
+pressed simultaneously with its matching Deck button cannot be distinguished
+from an echo. Set `FALLOUT_FP_KEYBOARD_ECHO=0` to disable correlation if needed.
+This filter applies inside the game; it cannot prevent desktop shortcuts
+handled by the window manager. Custom Steam keyboard layouts may have
+different echo keys and require further evidence from the device log.
+
+Raw events remain in the input recording, with `KEYBOARD_ECHO_SUPPRESSED`
+entries identifying consumed events and a `CONFIG` line showing whether the
+filter is enabled. Recording still uses `FALLOUT_FP_INPUT_LOG`.
+
+Validation includes actual SDL virtual Deck controller events: Y still
+dispatches Pip-boy while its Space echo, repeats, and release are filtered;
+a later independent Space and a generic controller's key remain available.
+Additional tests cover reversed arrival order, opt-out, unrelated keys, grip
+keys, reset, and SDL timestamp wraparound:
+
+```sh
+g++ -std=c++17 -Wall -Wextra -Werror -Isrc $(sdl2-config --cflags) tests/gamepad_keyboard_echo_test.cc -o /tmp/fp-keyboard-echo-test
+/tmp/fp-keyboard-echo-test
+```

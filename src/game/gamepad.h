@@ -6,6 +6,7 @@ void gamepad_init();
 void gamepad_shutdown();
 void gamepad_update(bool focused);
 void gamepad_handle_event(const SDL_Event& event);
+bool gamepad_filter_keyboard_echo(const SDL_Event& event);
 void gamepad_note_key(int key);
 const char* gamepad_diagnostic();
 SDL_GameController* gamepad_controller();

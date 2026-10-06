@@ -35,6 +35,7 @@ int main(int argc, char** argv)
     SDL_VirtualJoystickDesc desc {};
     desc.version = SDL_VIRTUAL_JOYSTICK_DESC_VERSION;
     desc.type = SDL_JOYSTICK_TYPE_GAMECONTROLLER;
+    desc.name = "Steam Deck test controller";
     desc.naxes = SDL_CONTROLLER_AXIS_MAX;
     desc.nbuttons = SDL_CONTROLLER_BUTTON_MAX;
     desc.axis_mask = (1u << SDL_CONTROLLER_AXIS_MAX) - 1;
@@ -60,6 +61,26 @@ int main(int argc, char** argv)
     assert(commands.size() == 1 && commands.back() == KEY_LOWERCASE_I);
     tick(); assert(commands.size() == 1);
     SDL_JoystickSetVirtualButton(joy, SDL_CONTROLLER_BUTTON_X, 0); tick();
+    // A real Deck-style Y press still dispatches Pip-boy, while its desktop
+    // keyboard Space echo (including repeats/release) is consumed separately.
+    commands.clear();
+    SDL_JoystickSetVirtualButton(joy, SDL_CONTROLLER_BUTTON_Y, 1); tick();
+    assert(commands.size() == 1 && commands.back() == KEY_LOWERCASE_P);
+    SDL_Event echo {};
+    echo.type = SDL_KEYDOWN;
+    echo.key.timestamp = SDL_GetTicks();
+    echo.key.keysym.scancode = SDL_SCANCODE_SPACE;
+    gamepad_handle_event(echo);
+    assert(gamepad_filter_keyboard_echo(echo));
+    echo.key.timestamp += 500;
+    echo.key.repeat = 1;
+    assert(gamepad_filter_keyboard_echo(echo));
+    echo.type = SDL_KEYUP;
+    assert(gamepad_filter_keyboard_echo(echo));
+    echo.type = SDL_KEYDOWN;
+    echo.key.repeat = 0;
+    assert(!gamepad_filter_keyboard_echo(echo)); // Independent Space remains usable.
+    SDL_JoystickSetVirtualButton(joy, SDL_CONTROLLER_BUTTON_Y, 0); tick();
     menu = true; tick(); commands.clear();
     SDL_JoystickSetVirtualButton(joy, SDL_CONTROLLER_BUTTON_DPAD_DOWN, 1); tick();
     assert(commands.back() == KEY_ARROW_DOWN);
@@ -114,6 +135,16 @@ int main(int argc, char** argv)
     assert(commands.size() == 1 && commands.back() == KEY_LOWERCASE_I);
     tick(); assert(commands.size() == 1);
     gamepad_note_key(KEY_F11); tick();
+    // Generic virtual gamepads must not enable Deck desktop-key suppression.
+    SDL_Event genericButton {};
+    genericButton.type = SDL_CONTROLLERBUTTONDOWN;
+    genericButton.cbutton.which = SDL_JoystickInstanceID(live);
+    genericButton.cbutton.button = SDL_CONTROLLER_BUTTON_Y;
+    genericButton.cbutton.timestamp = SDL_GetTicks() + 1000;
+    gamepad_handle_event(genericButton);
+    echo.type = SDL_KEYDOWN;
+    echo.key.timestamp = genericButton.cbutton.timestamp;
+    assert(!gamepad_filter_keyboard_echo(echo));
     SDL_Event keyboard {};
     keyboard.type = SDL_KEYDOWN;
     keyboard.key.keysym.scancode = SDL_SCANCODE_P;
@@ -138,6 +169,7 @@ int main(int argc, char** argv)
                  "EMULATED_MOUSE_DOWN", "EMULATED_MOUSE_UP", "Working Steam gamepad" }) {
             assert(log.find(entry) != std::string::npos);
         }
+        assert(log.find("KEYBOARD_ECHO_SUPPRESSED") != std::string::npos);
         assert(log.find("SESSION_START", log.find("SESSION_START") + 1) == std::string::npos);
     }
     std::cout << "PASS SDL virtual gamepad commands, menu confirmation, native click/drag, pointer, disconnect and multiple-controller selection\n";

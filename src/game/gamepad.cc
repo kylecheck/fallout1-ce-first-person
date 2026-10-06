@@ -1,5 +1,6 @@
 #include "game/gamepad.h"
 #include "game/gamepad_bindings.h"
+#include "game/gamepad_keyboard_echo.h"
 #include "game/first_person.h"
 #include "game/intface.h"
 #include "game/object.h"
@@ -26,6 +27,8 @@ static bool buttonEvent = false;
 static int lastKey = -1;
 static char diagnostic[256] = "PAD: discovering controllers";
 static bool nativeEnabled = true;
+static bool echoEnabled = true;
+static GamepadKeyboardEcho keyboardEcho;
 static bool mouseLeft = false;
 static double mouseX = 0, mouseY = 0;
 static Uint64 ticks = 0, discoveryAt = 0;
@@ -102,6 +105,9 @@ void gamepad_init()
 {
     const char* setting = std::getenv("FALLOUT_FP_GAMEPAD");
     nativeEnabled = setting == nullptr || setting[0] != '0';
+    const char* echoSetting = std::getenv("FALLOUT_FP_KEYBOARD_ECHO");
+    echoEnabled = echoSetting == nullptr || echoSetting[0] != '0';
+    keyboardEcho.reset();
     SDL_InitSubSystem(SDL_INIT_GAMECONTROLLER);
     if (inputLog != nullptr) std::fclose(inputLog);
     inputLog = nullptr;
@@ -117,6 +123,7 @@ void gamepad_init()
             SDL_GetVersion(&version);
             log_input("SESSION_START native-gamepad-log-v1 build=%s %s SDL=%d.%d.%d", __DATE__, __TIME__,
                 version.major, version.minor, version.patch);
+            log_input("CONFIG native=%d keyboard_echo_filter=%d", nativeEnabled, echoEnabled);
             for (const char* variable : { "SteamAppId", "SteamGameId", "SteamOverlayGameId" }) {
                 const char* value = std::getenv(variable);
                 log_input("LAUNCH %s=%s", variable, value == nullptr ? "unset" : value);
@@ -135,6 +142,7 @@ void gamepad_init()
 }
 void gamepad_shutdown()
 {
+    keyboardEcho.reset();
     log_input("SESSION_END");
     if (inputLog != nullptr) std::fclose(inputLog);
     inputLog = nullptr;
@@ -183,6 +191,13 @@ void gamepad_note_key(int key)
 const char* gamepad_diagnostic() { return diagnostic; }
 void gamepad_handle_event(const SDL_Event& event)
 {
+    if (nativeEnabled && echoEnabled && event.type == SDL_CONTROLLERBUTTONDOWN) {
+        SDL_GameController* pad = SDL_GameControllerFromInstanceID(event.cbutton.which);
+        const char* name = pad == nullptr ? nullptr : SDL_GameControllerName(pad);
+        if (name != nullptr && std::strstr(name, "Steam Deck") != nullptr) {
+            keyboardEcho.note_button(event.cbutton.button, event.cbutton.timestamp);
+        }
+    }
     if (inputLog != nullptr) {
         switch (event.type) {
         case SDL_KEYDOWN:
@@ -238,6 +253,14 @@ void gamepad_handle_event(const SDL_Event& event)
         activeEvent = id;
         buttonEvent = buttonEvent || down;
     }
+}
+bool gamepad_filter_keyboard_echo(const SDL_Event& event)
+{
+    const bool filtered = keyboardEcho.filter(event, nativeEnabled && echoEnabled);
+    if (filtered) log_input("KEYBOARD_ECHO_SUPPRESSED type=%s scancode=%d name=%s",
+        event.type == SDL_KEYDOWN ? "DOWN" : "UP", int(event.key.keysym.scancode),
+        SDL_GetScancodeName(event.key.keysym.scancode));
+    return filtered;
 }
 static void refresh_diagnostic(GamepadContext current, bool focused)
 {
