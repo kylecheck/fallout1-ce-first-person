@@ -1030,13 +1030,19 @@ void first_person_render()
     constexpr double kIsoXFromWorldX = 27.712812921102035;
     constexpr double kIsoYFromWorldX = -6.928203230275509;
 
-    for (int screenY = horizon + 1; screenY < height; screenY++) {
+    // Transitional performance path while the floor is being migrated to GPU
+    // geometry. Sample one perspective point per 2x2 output block instead of
+    // repeating the expensive world/square/art lookup for every single pixel.
+    // The game is already palette/pixel-art based, so this is a useful speed
+    // bridge without changing the authoritative projection or world mapping.
+    constexpr int kFloorSampleStep = 2;
+    for (int screenY = horizon + 1; screenY < height; screenY += kFloorSampleStep) {
         const double cameraZ = focal * kEyeHeight / (screenY - horizon);
         if (cameraZ < kNearPlane || cameraZ > kFarPlane) {
             continue;
         }
 
-        for (int screenX = 0; screenX < width; screenX++) {
+        for (int screenX = 0; screenX < width; screenX += kFloorSampleStep) {
             const double cameraX = (screenX - width * 0.5) * cameraZ / focal;
 
             const double worldDx = rightX * cameraX + forwardX * cameraZ;
@@ -1077,9 +1083,14 @@ void first_person_render()
 
             const unsigned char pixel = floorArt->pixels[sourceY * floorArt->frame->width + sourceX];
             if (pixel != 0) {
-                const int destination = screenY * width + screenX;
-                buffer[destination] = pixel;
-                depthBuffer[destination] = cameraZ;
+                for (int blockY = 0; blockY < kFloorSampleStep && screenY + blockY < height; blockY++) {
+                    for (int blockX = 0; blockX < kFloorSampleStep && screenX + blockX < width; blockX++) {
+                        const int destination =
+                            (screenY + blockY) * width + screenX + blockX;
+                        buffer[destination] = pixel;
+                        depthBuffer[destination] = cameraZ;
+                    }
+                }
             }
         }
     }
