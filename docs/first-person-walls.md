@@ -1038,3 +1038,31 @@ inventory exactly once. The original button/menu/click/drag/focus/disconnect,
 binding-hysteresis and AP/modal fixtures pass; modified source compiles. Actual
 Deck verification should first move the right stick while filming the PAD line,
 then press View/Select, A, B, X and R3 with the standard Gamepad template active.
+
+
+### Opt-in Steam Deck input recording
+
+Set `FALLOUT_FP_INPUT_LOG` to a writable file path when launching `fallout-ce`.
+For example, from Konsole in the Fallout data directory:
+
+```sh
+FALLOUT_FP_INPUT_LOG=/home/deck/fallout1-ce-first-person/input-debug.log /home/deck/fallout1-ce-first-person/build/fallout-ce
+```
+
+The file records timestamped SDL controller and raw joystick button transitions,
+changed axes, keyboard and mouse button events, decoded keys, selected controller
+and mapping, focus/menu context, and resulting native gamepad commands. Axis
+changes are throttled to about ten samples per second per axis, with deadzone
+crossings recorded immediately. Steam application IDs help compare shortcut and
+Konsole launches. It does not record text-input events or mouse motion.
+
+Each recorded launch replaces the file; lines are flushed as they are written.
+Quit and share the file before launching another recorded test. Without this
+environment variable, recording is disabled. For a useful test, use a safe save,
+move both sticks, press and release buttons individually with a pause, and try
+the action menu and its confirm/back controls. Note the physical button order
+so missing grip events can also be identified.
+
+The SDL virtual-controller integration fixture accepts an optional output path
+and verifies actual event records, context changes, dispatched actions, mouse
+transitions, controller mappings, and session boundaries.

@@ -5,6 +5,8 @@
 #include <cassert>
 #include <vector>
 #include <iostream>
+#include <fstream>
+#include <sstream>
 namespace fallout {
 Object player {};
 Object* obj_dude = &player;
@@ -24,9 +26,10 @@ bool intface_is_enabled() { return true; }
 void GNW_add_input_buffer(int key) { commands.push_back(key); }
 int debug_printf(const char*, ...) { return 0; }
 }
-int main()
+int main(int argc, char** argv)
 {
     using namespace fallout;
+    if (argc > 1) SDL_setenv("FALLOUT_FP_INPUT_LOG", argv[1], 1);
     assert(SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER) == 0);
     gamepad_init();
     SDL_VirtualJoystickDesc desc {};
@@ -111,10 +114,31 @@ int main()
     assert(commands.size() == 1 && commands.back() == KEY_LOWERCASE_I);
     tick(); assert(commands.size() == 1);
     gamepad_note_key(KEY_F11); tick();
+    SDL_Event keyboard {};
+    keyboard.type = SDL_KEYDOWN;
+    keyboard.key.keysym.scancode = SDL_SCANCODE_P;
+    gamepad_handle_event(keyboard);
+    keyboard.type = SDL_KEYUP;
+    gamepad_handle_event(keyboard);
     assert(std::string(gamepad_diagnostic()).find("KEY:") != std::string::npos);
     SDL_JoystickClose(live); SDL_JoystickClose(dormant);
     SDL_JoystickDetachVirtual(liveIndex); SDL_JoystickDetachVirtual(dormantIndex);
     tick();
     gamepad_shutdown(); SDL_Quit();
+    if (argc > 1) {
+        std::ifstream stream(argv[1]);
+        std::ostringstream contents;
+        contents << stream.rdbuf();
+        const std::string log = contents.str();
+        for (const char* entry : { "SESSION_START", "SESSION_END", "LAUNCH SteamAppId=",
+                 "OPEN device=", "mapping=", "CONTROLLER_DOWN", "CONTROLLER_UP",
+                 "RAW_DOWN", "RAW_UP", "CONTROLLER_AXIS", "STATE context=",
+                 "KEYBOARD_DOWN", "KEYBOARD_UP", "KEYBOARD_DECODED",
+                 "name=I / INVENTORY", "name=ENTER / CONFIRM",
+                 "EMULATED_MOUSE_DOWN", "EMULATED_MOUSE_UP", "Working Steam gamepad" }) {
+            assert(log.find(entry) != std::string::npos);
+        }
+        assert(log.find("SESSION_START", log.find("SESSION_START") + 1) == std::string::npos);
+    }
     std::cout << "PASS SDL virtual gamepad commands, menu confirmation, native click/drag, pointer, disconnect and multiple-controller selection\n";
 }
