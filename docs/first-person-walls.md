@@ -1188,6 +1188,17 @@ log records `HEAP_CHECK enabled` on the first check.
 it to find the footer, so a corrupted header is reported instead of faulting in
 the validator. Without the variable, no checks run.
 
+The first device run failed at `fp-frame-begin`, with `Bad guard end detected`:
+a block's data was overrun between two first-person frames. Checks now also run
+after each main-loop stage (`loop-get-input`, `loop-handle-input`,
+`loop-scripts`, `loop-map`), after `first_person_update` (`fp-update`) and after
+each native background process (`bk-gmouse`, `bk-object-animate`,
+`bk-dude-fidget`; static processes are labelled by their offset from
+`gmouse_bk_process`, resolved with `nm`). The report adds `owner` and
+`previous_owner`: the cache key, type, id, size, reference count and art file
+of the damaged block and the block before it. A bad footer points at the owner;
+a bad header points at the previous block.
+
 ```sh
 g++ -std=c++17 -Wall -Wextra -Werror -Wno-sign-compare -Wno-unused-parameter -ffunction-sections -fdata-sections -Isrc $(sdl2-config --cflags) tests/first_person_heap_check_test.cc -Wl,--gc-sections -o /tmp/fp-heap-check-test
 /tmp/fp-heap-check-test

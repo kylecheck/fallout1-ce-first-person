@@ -1,4 +1,5 @@
 #include "plib/gnw/input.h"
+#include "game/first_person_heap_check.h"
 #include "game/gamepad.h"
 
 #include <limits.h>
@@ -334,6 +335,7 @@ void GNW_do_bk_process()
             mem_free(curr);
         } else {
             curr->f();
+            first_person_heap_check_bk(curr->f);
             currPtr = &(curr->next);
         }
         curr = next;

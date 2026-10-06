@@ -515,11 +515,15 @@ bool heap_unlock(Heap* heap, int handleIndex)
 // 0x44A5A4
 // Reason for the most recent heap_validate failure, for diagnostics.
 static char heap_validate_failure[160];
+static int heap_validate_failure_handles[2] = { -1, -1 };
 
-static bool heap_validate_fail(const char* reason, int blockIndex, long offset)
+static bool heap_validate_fail(const char* reason, int blockIndex, long offset,
+    int handleIndex = -1, int previousHandleIndex = -1)
 {
     snprintf(heap_validate_failure, sizeof(heap_validate_failure),
         "%s block=%d offset=%ld", reason, blockIndex, offset);
+    heap_validate_failure_handles[0] = handleIndex;
+    heap_validate_failure_handles[1] = previousHandleIndex;
     debug_printf("%s during validate.\n", reason);
     return false;
 }
@@ -529,10 +533,18 @@ const char* heap_validate_last_failure()
     return heap_validate_failure;
 }
 
+void heap_validate_last_failure_handles(int* handleIndex, int* previousHandleIndex)
+{
+    *handleIndex = heap_validate_failure_handles[0];
+    *previousHandleIndex = heap_validate_failure_handles[1];
+}
+
 bool heap_validate(Heap* heap)
 {
     debug_printf("Validating heap...\n");
     heap_validate_failure[0] = '\0';
+    heap_validate_failure_handles[0] = heap_validate_failure_handles[1] = -1;
+    int previousHandleIndex = -1;
 
     int blocksCount = heap->freeBlocks + heap->moveableBlocks + heap->lockedBlocks;
     unsigned char* ptr = heap->data;
@@ -548,23 +560,26 @@ bool heap_validate(Heap* heap)
         HeapBlockHeader* blockHeader = (HeapBlockHeader*)ptr;
         const long offset = static_cast<long>(ptr - heap->data);
         if (offset < 0 || offset + static_cast<long>(HEAP_BLOCK_OVERHEAD_SIZE) > heap->size) {
-            return heap_validate_fail("Ran off end of heap", index, offset);
+            return heap_validate_fail("Ran off end of heap", index, offset, -1, previousHandleIndex);
         }
 
+        // A damaged header was most likely overrun from the previous block.
         if (blockHeader->guard != HEAP_BLOCK_HEADER_GUARD) {
-            return heap_validate_fail("Bad guard begin detected", index, offset);
+            return heap_validate_fail("Bad guard begin detected", index, offset, -1, previousHandleIndex);
         }
 
         // Check the size before using it to locate the footer, so a corrupted
         // header is reported instead of faulting inside the validator.
         if (blockHeader->size < 0
             || blockHeader->size > heap->size - offset - static_cast<long>(HEAP_BLOCK_OVERHEAD_SIZE)) {
-            return heap_validate_fail("Bad block size detected", index, offset);
+            return heap_validate_fail("Bad block size detected", index, offset,
+                blockHeader->handle_index, previousHandleIndex);
         }
 
         HeapBlockFooter* blockFooter = (HeapBlockFooter*)(ptr + blockHeader->size + HEAP_BLOCK_HEADER_SIZE);
         if (blockFooter->guard != HEAP_BLOCK_FOOTER_GUARD) {
-            return heap_validate_fail("Bad guard end detected", index, offset);
+            return heap_validate_fail("Bad guard end detected", index, offset,
+                blockHeader->handle_index, previousHandleIndex);
         }
 
         if (blockHeader->state == HEAP_BLOCK_STATE_FREE) {
@@ -578,6 +593,7 @@ bool heap_validate(Heap* heap)
             lockedSize += blockHeader->size;
         }
 
+        previousHandleIndex = blockHeader->handle_index;
         if (index != blocksCount - 1) {
             ptr += blockHeader->size + HEAP_BLOCK_OVERHEAD_SIZE;
             if (ptr > (heap->data + heap->size)) {

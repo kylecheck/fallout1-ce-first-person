@@ -480,6 +480,7 @@ int gmouse_is_scrolling()
 void gmouse_bk_process()
 {
     first_person_update();
+    first_person_heap_check("fp-update");
 
     // 0x595214
     static Object* last_object;

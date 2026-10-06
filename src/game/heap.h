@@ -35,6 +35,8 @@ bool heap_stats(Heap* heap, char* dest, size_t size);
 bool heap_validate(Heap* heap);
 // Reason for the most recent heap_validate failure; empty after success.
 const char* heap_validate_last_failure();
+// Heap handles of the failing block and the block before it, or -1.
+void heap_validate_last_failure_handles(int* handleIndex, int* previousHandleIndex);
 
 } // namespace fallout
 

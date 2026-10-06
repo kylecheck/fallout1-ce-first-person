@@ -90,9 +90,47 @@ int main()
 
     assert(check(&heap, report, sizeof(report)));
     assert(heap_validate_last_failure()[0] == '\0');
+
+    // A cache names the art that owns a damaged block and its predecessor.
+    Cache cache {};
+    cache.heap = heap;
+    CacheEntry entries[3] {};
+    CacheEntry* entryList[3] = { &entries[0], &entries[1], &entries[2] };
+    for (int i = 0; i < 3; i++) {
+        entries[i].key = 0x06000010 + i;
+        entries[i].size = 1000 + i * 100;
+        entries[i].referenceCount = i == 2 ? 0 : 1;
+        entries[i].heapHandleIndex = handles[i];
+    }
+    cache.entries = entryList;
+    cache.entriesLength = 3;
+    auto artName = [](int key) -> const char* { return key == 0x06000011 ? "MIDDLE.FRM" : nullptr; };
+    buffers[1][middle->size] ^= 0xFF;
+    assert(!first_person_heap_check_cache(&cache, "cache-label", 7, artName, report, sizeof(report)));
+    assert(std::strstr(report, "label=cache-label frame=7 reason=Bad guard end detected block=1") != nullptr);
+    assert(std::strstr(report, " owner=handle:") != nullptr);
+    assert(std::strstr(report, ",key:0x06000011,type:6,id:17,size:1100,refs:1,art:MIDDLE.FRM") != nullptr);
+    assert(std::strstr(report, " previous_owner=handle:") != nullptr);
+    assert(std::strstr(report, ",key:0x06000010,type:6,id:16,size:1000,refs:1,art:?") != nullptr);
+    buffers[1][middle->size] = saved;
+    // A damaged header blames the block that precedes it.
+    last->guard = 0;
+    assert(!first_person_heap_check_cache(&cache, "cache-label", 7, nullptr, report, sizeof(report)));
+    assert(std::strstr(report, "reason=Bad guard begin detected block=2") != nullptr);
+    assert(std::strstr(report, " owner=none previous_owner=handle:") != nullptr);
+    assert(std::strstr(report, ",key:0x06000011,") != nullptr);
+    last->guard = guard;
+    // Handles without a cache entry are still reported.
+    cache.entriesLength = 0;
+    buffers[1][middle->size] ^= 0xFF;
+    assert(!first_person_heap_check_cache(&cache, "cache-label", 7, nullptr, report, sizeof(report)));
+    assert(std::strstr(report, ",no-cache-entry previous_owner=handle:") != nullptr);
+    buffers[1][middle->size] = saved;
+    assert(first_person_heap_check_cache(&cache, "cache-label", 7, nullptr, report, sizeof(report)));
+
     for (int i = 0; i < 2; i++) assert(heap_unlock(&heap, handles[i]));
     for (int& handle : handles) assert(heap_deallocate(&heap, &handle));
     assert(check(&heap, report, sizeof(report)));
     heap_exit(&heap);
-    std::cout << "PASS heap check reports overruns, bad sizes and counter drift\n";
+    std::cout << "PASS heap check reports overruns, owners, bad sizes and counter drift\n";
 }
