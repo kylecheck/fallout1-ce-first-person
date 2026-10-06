@@ -773,3 +773,19 @@ The equipped first-person weapon viewmodel is now the first textured presentatio
 First-person MOVE / INTERACT / ATTACK state is now stored independently from Fallout's legacy mouse-mode state. This prevents the native pre-combat cursor rules from silently removing ATTACK mode. First-person left-click handling now routes directly through that dedicated state: ATTACK can start native combat on the center-reticle critter target, while INTERACT uses the same live-object use/examine paths as before.
 
 While the world renderer is being migrated to the GPU, the software perspective floor now samples one authoritative projection lookup per 2x2 output block instead of per pixel. This reduces the most expensive current floor loop by roughly four times while preserving the established world-to-isometric mapping and leaving picking/combat coordinates unchanged. This is a temporary performance bridge, not the final GPU floor implementation.
+
+
+## Unify right-click mode cycling and HUD with dedicated state
+
+The dedicated first-person mode was already used by M, the reticle and click
+routing. Right-click still called the legacy cursor cycle, which deliberately
+skips CROSSHAIR outside combat. The mode/combat text also still read legacy
+state, so its label could disagree with the reticle and actual action.
+
+Right-click now invokes the same first-person MOVE -> INTERACT -> ATTACK cycle
+as M. The mode/combat text reads that same state. Native isometric right-click
+behavior is unchanged. This addresses an input/state mismatch, not GPU warm-up
+or a proven first-combat initialization defect. Validate from a fresh load:
+cycle into ATTACK before combat, check HUD/reticle agree, target a live critter,
+and click; then repeat after combat ends. World rendering remains software;
+GPU composition currently covers the reticle and weapon texture.

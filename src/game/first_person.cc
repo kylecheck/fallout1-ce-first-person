@@ -2648,7 +2648,7 @@ void first_person_render()
     // authority for combat state, AP, weapon state, range and hit chance; this
     // pass only mirrors that information into the first-person viewport.
     {
-        const int mode = gmouse_3d_get_mode();
+        const int mode = first_person_mode();
         const char* modeName = "MOVE";
         switch (mode) {
         case GAME_MOUSE_MODE_ARROW:

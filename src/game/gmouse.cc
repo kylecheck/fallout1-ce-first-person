@@ -889,7 +889,9 @@ void gmouse_handle_event(int mouseX, int mouseY, int mouseState)
 
     if ((mouseState & MOUSE_EVENT_RIGHT_BUTTON_DOWN) != 0) {
         if ((mouseState & MOUSE_EVENT_RIGHT_BUTTON_REPEAT) == 0) {
-            if (gmouse_3d_is_on()) {
+            if (first_person_is_enabled()) {
+                first_person_cycle_mode();
+            } else if (gmouse_3d_is_on()) {
                 gmouse_3d_toggle_mode();
             }
         }
