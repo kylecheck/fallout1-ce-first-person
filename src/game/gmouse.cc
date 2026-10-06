@@ -897,6 +897,72 @@ void gmouse_handle_event(int mouseX, int mouseY, int mouseState)
     }
 
     if ((mouseState & MOUSE_EVENT_LEFT_BUTTON_UP) != 0) {
+        if (first_person_is_enabled()) {
+            const int firstPersonMode = first_person_mode();
+            if (firstPersonMode == GAME_MOUSE_MODE_CROSSHAIR) {
+                Object* target = object_under_mouse(
+                    OBJ_TYPE_CRITTER,
+                    false,
+                    map_elevation);
+                if (target != NULL) {
+                    if (!isInCombat()) {
+                        STRUCT_664980 attack {};
+                        attack.attacker = obj_dude;
+                        attack.defender = target;
+                        attack.actionPointsBonus = 0;
+                        attack.accuracyBonus = 0;
+                        attack.damageBonus = 0;
+                        attack.minDamage = 0;
+                        attack.maxDamage = INT_MAX;
+                        attack.field_1C = 0;
+                        combat(&attack);
+                    } else {
+                        combat_attack_this(target);
+                    }
+                }
+                return;
+            }
+
+            if (firstPersonMode == GAME_MOUSE_MODE_ARROW) {
+                Object* target = object_under_mouse(-1, true, map_elevation);
+                if (target != NULL) {
+                    switch (FID_TYPE(target->fid)) {
+                    case OBJ_TYPE_ITEM:
+                        action_get_an_object(obj_dude, target);
+                        break;
+                    case OBJ_TYPE_CRITTER:
+                        if (target != obj_dude) {
+                            if (obj_action_can_talk_to(target)) {
+                                if (isInCombat()) {
+                                    if (obj_examine(obj_dude, target) == -1) {
+                                        obj_look_at(obj_dude, target);
+                                    }
+                                } else {
+                                    action_talk_to(obj_dude, target);
+                                }
+                            } else {
+                                action_loot_container(obj_dude, target);
+                            }
+                        }
+                        break;
+                    case OBJ_TYPE_SCENERY:
+                        if (proto_action_can_use(target->pid)) {
+                            action_use_an_object(obj_dude, target);
+                        } else if (obj_examine(obj_dude, target) == -1) {
+                            obj_look_at(obj_dude, target);
+                        }
+                        break;
+                    case OBJ_TYPE_WALL:
+                        if (obj_examine(obj_dude, target) == -1) {
+                            obj_look_at(obj_dude, target);
+                        }
+                        break;
+                    }
+                }
+                return;
+            }
+        }
+
         if (gmouse_3d_current_mode == GAME_MOUSE_MODE_MOVE) {
             int actionPoints;
             if (isInCombat()) {
