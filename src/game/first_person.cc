@@ -354,6 +354,33 @@ bool first_person_controller_move_active()
     return std::sqrt(x * x + y * y) >= kMoveDeadZone;
 }
 
+void first_person_cycle_mode()
+{
+    if (!gFirstPersonEnabled) {
+        gmouse_3d_toggle_mode();
+        return;
+    }
+
+    int nextMode = GAME_MOUSE_MODE_MOVE;
+    switch (gmouse_3d_get_mode()) {
+    case GAME_MOUSE_MODE_MOVE:
+        nextMode = GAME_MOUSE_MODE_ARROW;
+        break;
+    case GAME_MOUSE_MODE_ARROW:
+        nextMode = GAME_MOUSE_MODE_CROSSHAIR;
+        break;
+    case GAME_MOUSE_MODE_CROSSHAIR:
+    default:
+        nextMode = GAME_MOUSE_MODE_MOVE;
+        break;
+    }
+
+    // Fallout's stock toggle deliberately skips attack mode outside combat.
+    // First person owns its world-mode cycle, so expose attack mode explicitly.
+    // Native combat still starts only when an actual target is attacked.
+    gmouse_3d_set_mode(nextMode);
+}
+
 void first_person_update()
 {
     if (!gFirstPersonEnabled) {
