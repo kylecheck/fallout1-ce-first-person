@@ -192,7 +192,10 @@ inline double first_person_sprite_box_back_y(const FirstPersonSpriteBoxFit& box,
     return x < backX ? leftY + ew * (x - box.leftX) : rightY - ns * (box.rightX - x);
 }
 
-inline FirstPersonSpriteBoxFit first_person_sprite_box_fit(const unsigned char* pixels, int width, int height)
+// minHeight: the least top rise that makes a box; flat footprints (a rug, a
+// mat) fit with a rise near zero and are tested with a negative minHeight.
+inline FirstPersonSpriteBoxFit first_person_sprite_box_fit(const unsigned char* pixels, int width, int height,
+    double minHeight = 4.0)
 {
     FirstPersonSpriteBoxFit box;
     if (pixels == nullptr || width < 12 || height < 6) return box;
@@ -278,14 +281,35 @@ inline FirstPersonSpriteBoxFit first_person_sprite_box_fit(const unsigned char* 
     for (double rise : rises) following += std::abs(rise - box.height) <= 4.0;
     // Big furniture may raise up to half its top (a headboard, a hutch); a
     // small piece with that much raised is a chair, which as a box smears.
+    // A small piece must also be nearly solid between its outline's top and
+    // bottom: open legs (a stool, a vault chair) smear the same way.
     const int needed = columns >= 64 ? 5 : 6;
-    if (box.height < 4.0 || following * 10 < columns * needed) return FirstPersonSpriteBoxFit {};
+    if (columns < 64) {
+        double opaque = 0.0;
+        double span = 0.0;
+        for (int x = first; x <= last; x++) {
+            span += bottoms[x] - tops[x];
+            for (int y = static_cast<int>(tops[x]); y < static_cast<int>(bottoms[x]); y++) opaque += pixels[y * width + x] != 0;
+        }
+        if (opaque < 0.85 * span) return FirstPersonSpriteBoxFit {};
+    }
+    if (box.height < minHeight || following * 10 < columns * needed) return FirstPersonSpriteBoxFit {};
     // The footprint's back corner must lie above the front corner.
     if (first_person_sprite_box_back_y(box, box.leftX + box.rightX - box.frontX) > box.frontY) {
         return FirstPersonSpriteBoxFit {};
     }
     box.ok = true;
     return box;
+}
+
+// Whether a frame shows a flat footprint lying on the floor: its outline is
+// a box's with a top no more than 7 px above the footprint over most columns
+// and nothing rising higher than 10 px. Rugs and mats are; bone heaps, trash
+// piles and flat-flagged machinery are not.
+inline bool first_person_sprite_flat_footprint(const unsigned char* pixels, int width, int height)
+{
+    const FirstPersonSpriteBoxFit fit = first_person_sprite_box_fit(pixels, width, height, -1.0e9);
+    return fit.ok && fit.height <= 7.0 && fit.maxHeight <= 10.0;
 }
 
 // A face of a box: its world quad and, for each corner, the frame pixel

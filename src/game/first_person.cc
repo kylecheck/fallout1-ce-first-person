@@ -3254,13 +3254,15 @@ static void first_person_render_now()
             int maxY;
             FirstPersonSpriteWallAxis wallAxis;
             FirstPersonSpriteBoxFit box;
+            bool flatFootprint;
         };
         static std::unordered_map<std::uint64_t, OpaqueBounds> opaqueBoundsCache;
         auto cachedBounds = opaqueBoundsCache.find(spriteKey);
         if (cachedBounds == opaqueBoundsCache.end()) {
             OpaqueBounds bounds { frame->width, frame->height, -1, -1,
                 first_person_sprite_wall_axis(pixels, frame->width, frame->height),
-                first_person_sprite_box_fit(pixels, frame->width, frame->height) };
+                first_person_sprite_box_fit(pixels, frame->width, frame->height),
+                first_person_sprite_flat_footprint(pixels, frame->width, frame->height) };
             for (int sy = 0; sy < frame->height; sy++) {
                 for (int sx = 0; sx < frame->width; sx++) {
                     if (pixels[sy * frame->width + sx] != 0) {
@@ -3311,7 +3313,10 @@ static void first_person_render_now()
             // pile of small objects only when standing; container items are
             // furniture (desks, lockers, shelves).
             const bool looseItem = object.type == OBJ_TYPE_ITEM && item_get_type(native) != ITEM_TYPE_CONTAINER;
-            if (!looseItem && (native->flags & OBJECT_FLAT) != 0) {
+            // Flat-flagged art lies on the floor only when its outline is a flat
+            // footprint (rugs, mats); heaps (bones, trash) and flat-flagged
+            // machinery stand.
+            if (!looseItem && (native->flags & OBJECT_FLAT) != 0 && cachedBounds->second.flatFootprint) {
                 wholeFrame(first_person_sprite_floor_quad(hexX, hexY, frame->width, frame->height,
                     offsetX, offsetY, 0.01));
             } else if (!looseItem && deepBox) {

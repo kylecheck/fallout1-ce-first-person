@@ -1613,8 +1613,11 @@ Scenery and items no longer stand on camera-facing cards at one depth. They
 keep their original frames, drawn on a world-space surface chosen from native
 data and the art's own outline (no per-asset lists):
 
-- Native flat objects (`OBJECT_FLAT`: bed rolls, rugs, bones, holes, the
-  vault floor art) lie on the floor. Each frame corner goes where native
+- Native flat objects (`OBJECT_FLAT`) whose outline is a flat footprint
+  (`first_person_sprite_flat_footprint`: a box fit with its top within 7 px
+  of the footprint and nothing above 10 px: rugs, mats, holes, the vault
+  floor art) lie on the floor. Flat-flagged heaps (bones, trash, bodies) and
+  machinery (the vats, cars, towers) are placed like other scenery. Each frame corner goes where native
   drawing puts it (bottom centre at the hex centre plus the art offsets and the
   object's shift), mapped back through the isometric projection, so they cover
   the same floor as in the isometric view.
@@ -1640,7 +1643,9 @@ data and the art's own outline (no per-asset lists):
   pixels it projects to, so every pixel lands on the face it depicts and the
   front edges touch the floor. Boxes need 6+ px of depth on both front
   edges and win over the wall band (bookshelves are both). Chairs with
-  backs, consoles and other uneven tops fail the fit. The GPU samples box
+  backs, consoles and other uneven tops fail the fit, as do pieces under
+  64 px wide that are less than 85% solid between their outline's top and
+  bottom (open-legged vault chairs smeared as boxes). The GPU samples box
   faces from a copy of the frame with a transparent border; the whole face
   is the pick proxy.
 - Everything else turns toward the viewer and leans back by the native camera's

@@ -282,6 +282,10 @@ int main()
         }
         fit = first_person_sprite_box_fit(bed.data(), width, height);
         assert(fit.ok && std::abs(fit.height - 20.0) <= 1.5 && std::abs(fit.maxHeight - 40.0) <= 1.5);
+        // Flat footprints: the box outline with almost no rise.
+        std::vector<unsigned char> rug = silhouette(3.0, 0);
+        assert(first_person_sprite_flat_footprint(rug.data(), width, height));
+        assert(!first_person_sprite_flat_footprint(solid.data(), width, height));
         // A blob that stands on one point is not a box.
         std::vector<unsigned char> blob(static_cast<size_t>(width) * height, 0);
         for (int y = 0; y < height; y++) {
