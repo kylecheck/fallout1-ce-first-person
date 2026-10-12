@@ -5,6 +5,7 @@
 #include <array>
 #include <cmath>
 #include <cstdlib>
+#include <cstring>
 #include <vector>
 namespace fallout {
 namespace {
@@ -250,13 +251,36 @@ void first_person_world_gpu_quad(const unsigned char* pixels,int w,int h,
     if(proxy) { Proxy p {}; std::copy(vertices,vertices+4,p.vertices.begin()); p.owner=owner; proxies.push_back(p); return; }
     if(pixels && w>0 && h>0) { pUniform1f(farUniform,farLimit); draw(texture(pixels,w,h),vertices,owner); }
 }
-bool first_person_world_gpu_read(unsigned char* indexed,float* depth,std::uint32_t* owners,std::uint32_t* assisted) {
+bool first_person_world_gpu_finish(unsigned char* indexed) {
     const GLenum outputs[3]={GL_NONE,GL_NONE,GL_COLOR_ATTACHMENT2}; pDrawBuffers(3,outputs);
     pDepthFunc(GL_LEQUAL); pDepthMask(GL_FALSE); pUniform1f(farUniform,farZ);
     std::sort(proxies.begin(),proxies.end(),[](const Proxy& a,const Proxy& b){return a.vertices[0].z>b.vertices[0].z;});
     const unsigned char white=255; GLuint tex=texture(&white,1,1);
     for(const auto& p:proxies) draw(tex,p.vertices.data(),p.owner);
     pReadBuffer(GL_COLOR_ATTACHMENT0); pReadPixels(0,0,frameWidth,frameHeight,GL_RED,GL_UNSIGNED_BYTE,indexed);
+    const bool ok=pGetError()==GL_NO_ERROR;
+    if(!ok) { failed=true; SDL_Log("FP GPU frame failed; reverting to software"); restore(); }
+    return ok;
+}
+// Rectangles are in top-down image rows, as are the outputs (w per row).
+bool first_person_world_gpu_read_region(int x,int y,int w,int h,float* depth,std::uint32_t* owners,std::uint32_t* assisted) {
+    if(x<0||y<0||w<=0||h<=0||x+w>frameWidth||y+h>frameHeight) return false;
+    static std::vector<std::uint32_t> rows; rows.resize(static_cast<size_t>(w)*h);
+    const int glY=frameHeight-(y+h);
+    static_assert(sizeof(float)==sizeof(std::uint32_t),"rows hold either type");
+    auto flip=[&](void* out) {
+        for(int r=0;r<h;r++) std::memcpy(static_cast<char*>(out)+static_cast<size_t>(r)*w*4,rows.data()+static_cast<size_t>(h-1-r)*w,static_cast<size_t>(w)*4);
+    };
+    if(owners) { pReadBuffer(GL_COLOR_ATTACHMENT1); pReadPixels(x,glY,w,h,GL_RED_INTEGER,GL_UNSIGNED_INT,rows.data()); flip(owners); }
+    if(assisted) { pReadBuffer(GL_COLOR_ATTACHMENT2); pReadPixels(x,glY,w,h,GL_RED_INTEGER,GL_UNSIGNED_INT,rows.data()); flip(assisted); }
+    if(depth) { pReadPixels(x,glY,w,h,GL_DEPTH_COMPONENT,GL_FLOAT,rows.data()); flip(depth); }
+    const bool ok=pGetError()==GL_NO_ERROR;
+    if(!ok) { failed=true; SDL_Log("FP GPU region read failed; reverting to software"); }
+    return ok;
+}
+void first_person_world_gpu_end() { restore(); }
+bool first_person_world_gpu_read(unsigned char* indexed,float* depth,std::uint32_t* owners,std::uint32_t* assisted) {
+    if(!first_person_world_gpu_finish(indexed)) return false;
     pReadBuffer(GL_COLOR_ATTACHMENT1); pReadPixels(0,0,frameWidth,frameHeight,GL_RED_INTEGER,GL_UNSIGNED_INT,owners);
     pReadBuffer(GL_COLOR_ATTACHMENT2); pReadPixels(0,0,frameWidth,frameHeight,GL_RED_INTEGER,GL_UNSIGNED_INT,assisted);
     pReadPixels(0,0,frameWidth,frameHeight,GL_DEPTH_COMPONENT,GL_FLOAT,depth);

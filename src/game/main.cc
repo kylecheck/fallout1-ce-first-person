@@ -351,7 +351,7 @@ static int main_fp_map_sweep(const char* path)
     const int fileListLength = db_get_file_list("maps\\*.map", &fileList, NULL, 0);
     const char* fromValue = std::getenv("FALLOUT_FP_MAP_SWEEP_FROM");
     const int from = fromValue != nullptr ? std::max(0, std::atoi(fromValue)) : 0;
-    std::fprintf(out, "# MAP index name | FRAME map elevation tile heading ms coverage objects renderer | DONE map frames\n");
+    std::fprintf(out, "# MAP index name | FRAME map elevation tile heading ms coverage objects renderer pickWindows pickMismatches | DONE map frames\n");
     std::fflush(out);
 
     std::atomic<bool> done { false };

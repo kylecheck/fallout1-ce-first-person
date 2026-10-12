@@ -192,6 +192,30 @@ static std::vector<FirstPersonPick> gFirstPersonPicks;
 // terminals/containers selectable even when the cursor sits over a scaled-up
 // transparent hole in the original isometric FRM.
 static std::vector<FirstPersonPick> gFirstPersonInteractionPicks;
+// Which pixels of the pick buffers hold this frame's data. The software
+// renderer writes every pixel. The GPU path reads back object ids only in
+// windows: around the reticle (input and hover always pick there), the target
+// hex outline and an attack target's bounds. Elsewhere a pick is empty.
+struct FirstPersonPickRect {
+    int left;
+    int top;
+    int right;
+    int bottom;
+};
+static bool gPickFull = true;
+static std::vector<FirstPersonPickRect> gPickRects;
+// The map sweep measures coverage over the whole frame.
+static bool gFirstPersonFullReadback = false;
+
+static FirstPersonPick first_person_pick(const std::vector<FirstPersonPick>& picks, int width, int x, int y)
+{
+    bool valid = gPickFull;
+    for (size_t i = 0; i < gPickRects.size() && !valid; i++) {
+        const FirstPersonPickRect& r = gPickRects[i];
+        valid = x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+    }
+    return valid ? picks[static_cast<size_t>(y) * width + x] : FirstPersonPick { nullptr, -1 };
+}
 static int gPickWidth = 0;
 static int gPickHeight = 0;
 static int gPickTile = -1;
@@ -910,7 +934,7 @@ Object* first_person_object_at(int screenX, int screenY, int objectType, bool in
     };
 
     // Exact visible-pixel targeting is always authoritative.
-    const FirstPersonPick exactPick = gFirstPersonPicks[y * gPickWidth + x];
+    const FirstPersonPick exactPick = first_person_pick(gFirstPersonPicks, gPickWidth, x, y);
     if (Object* exact = resolvePick(exactPick, true)) {
         return exact;
     }
@@ -921,7 +945,7 @@ Object* first_person_object_at(int screenX, int screenY, int objectType, bool in
     // proxy keeps the object selectable without changing what is actually
     // rendered or bypassing Fallout's native object/use/combat logic.
     const FirstPersonPick proxyPick =
-        gFirstPersonInteractionPicks[y * gPickWidth + x];
+        first_person_pick(gFirstPersonInteractionPicks, gPickWidth, x, y);
     if (Object* proxy = resolvePick(proxyPick, false)) {
         return proxy;
     }
@@ -956,9 +980,9 @@ Object* first_person_object_at(int screenX, int screenY, int objectType, bool in
             }
 
             FirstPersonPick nearbyPick =
-                gFirstPersonPicks[py * gPickWidth + px];
+                first_person_pick(gFirstPersonPicks, gPickWidth, px, py);
             if (nearbyPick.object == nullptr) {
-                nearbyPick = gFirstPersonInteractionPicks[py * gPickWidth + px];
+                nearbyPick = first_person_pick(gFirstPersonInteractionPicks, gPickWidth, px, py);
             }
             Object* candidate = resolvePick(
                 nearbyPick,
@@ -1214,11 +1238,6 @@ static void first_person_render_now()
         gFirstPersonDepthBuffer.resize(pixelCount);
         gFirstPersonInteractionDepth.resize(pixelCount);
     }
-    std::fill(gFirstPersonPicks.begin(), gFirstPersonPicks.end(), FirstPersonPick { nullptr, -1 });
-    std::fill(
-        gFirstPersonInteractionPicks.begin(),
-        gFirstPersonInteractionPicks.end(),
-        FirstPersonPick { nullptr, -1 });
 
     const int sky = colorTable[0];
     const int ground = colorTable[10570];
@@ -1232,6 +1251,15 @@ static void first_person_render_now()
     static const bool debugWalls = std::getenv("FALLOUT_FP_WALL_DEBUG") != nullptr;
     const bool gpuWorld = !debugWalls && first_person_world_gpu_begin(
         width, height, horizon, static_cast<unsigned char>(sky), static_cast<unsigned char>(ground));
+    // The GPU path overwrites the pick and depth data it reads back, so only
+    // the software renderer clears them.
+    gPickFull = !gpuWorld || gFirstPersonFullReadback;
+    gPickRects.clear();
+    if (!gpuWorld) {
+        std::fill(gFirstPersonPicks.begin(), gFirstPersonPicks.end(), FirstPersonPick { nullptr, -1 });
+        std::fill(gFirstPersonInteractionPicks.begin(), gFirstPersonInteractionPicks.end(),
+            FirstPersonPick { nullptr, -1 });
+    }
     gFirstPersonLastFrameGpu = gpuWorld;
     std::vector<FirstPersonPick> gpuOwners { { nullptr, -1 } };
     auto gpuOwner = [&](Object* object) -> std::uint32_t {
@@ -1277,14 +1305,16 @@ static void first_person_render_now()
     // project sprites into perspective that is no longer enough. Keeping depth
     // per framebuffer pixel gives later wall geometry a proper foundation and
     // stops distant cardboard sprites from drawing through nearer ones.
-    std::fill(
-        gFirstPersonDepthBuffer.begin(),
-        gFirstPersonDepthBuffer.end(),
-        kFarPlane + 1.0);
-    std::fill(
-        gFirstPersonInteractionDepth.begin(),
-        gFirstPersonInteractionDepth.end(),
-        kFarPlane + 1.0);
+    if (!gpuWorld) {
+        std::fill(
+            gFirstPersonDepthBuffer.begin(),
+            gFirstPersonDepthBuffer.end(),
+            kFarPlane + 1.0);
+        std::fill(
+            gFirstPersonInteractionDepth.begin(),
+            gFirstPersonInteractionDepth.end(),
+            kFarPlane + 1.0);
+    }
     std::vector<double>& depthBuffer = gFirstPersonDepthBuffer;
     std::vector<double>& interactionDepth = gFirstPersonInteractionDepth;
 
@@ -2735,29 +2765,81 @@ static void first_person_render_now()
         art_ptr_unlock(cacheEntry);
     }
 
+    // GPU readback: full colour, then ids, proxies and depth only where this
+    // frame needs them. The session stays open for an attack target's bounds.
+    struct GpuReadSession {
+        bool open = false;
+        void close()
+        {
+            if (open) first_person_world_gpu_end();
+            open = false;
+        }
+        ~GpuReadSession() { close(); }
+    } gpuRead;
+    auto readPicks = [&](int left, int top, int right, int bottom, bool withDepth) -> bool {
+        left = std::max(0, left);
+        top = std::max(0, top);
+        right = std::min(width - 1, right);
+        bottom = std::min(height - 1, bottom);
+        if (right < left || bottom < top) return true;
+        const int w = right - left + 1;
+        const int h = bottom - top + 1;
+        static std::vector<float> regionDepth;
+        static std::vector<std::uint32_t> regionIds, regionProxies;
+        regionDepth.resize(static_cast<size_t>(w) * h);
+        regionIds.resize(static_cast<size_t>(w) * h);
+        regionProxies.resize(static_cast<size_t>(w) * h);
+        if (!first_person_world_gpu_read_region(left, top, w, h, withDepth ? regionDepth.data() : nullptr,
+                regionIds.data(), regionProxies.data())) {
+            return false;
+        }
+        constexpr double n = 0.45, f = 128.0;
+        for (int y = 0; y < h; y++) {
+            for (int x = 0; x < w; x++) {
+                const size_t src = static_cast<size_t>(y) * w + x;
+                const size_t dst = static_cast<size_t>(top + y) * width + left + x;
+                gFirstPersonPicks[dst] = regionIds[src] < gpuOwners.size() ? gpuOwners[regionIds[src]]
+                                                                             : FirstPersonPick { nullptr, -1 };
+                gFirstPersonInteractionPicks[dst] = regionProxies[src] < gpuOwners.size()
+                    ? gpuOwners[regionProxies[src]]
+                    : FirstPersonPick { nullptr, -1 };
+                if (withDepth) {
+                    depthBuffer[dst] = regionDepth[src] >= 1.0f ? 1.0e30
+                        : 2.0 * f * n / (f + n - (2.0 * regionDepth[src] - 1.0) * (f - n));
+                }
+            }
+        }
+        gPickRects.push_back({ left, top, right, bottom });
+        return true;
+    };
     if (gpuWorld) {
         static std::vector<unsigned char> gpuPixels;
-        static std::vector<float> gpuDepth;
         profileMark(FP_PROFILE_OBJECTS);
-        static std::vector<std::uint32_t> gpuIds, gpuProxies;
-        gpuPixels.resize(pixelCount); gpuDepth.resize(pixelCount);
-        gpuIds.resize(pixelCount); gpuProxies.resize(pixelCount);
-        if (!first_person_world_gpu_read(gpuPixels.data(), gpuDepth.data(), gpuIds.data(), gpuProxies.data())) {
+        gpuPixels.resize(pixelCount);
+        if (!first_person_world_gpu_finish(gpuPixels.data())) {
             // The backend disables itself before returning. Re-render once
             // using the established software path instead of showing a partial frame.
             first_person_render_now();
             return;
         }
-        constexpr double n = 0.45, f = 128.0;
+        gpuRead.open = true;
         for (int y = 0; y < height; y++) {
-            for (int x = 0; x < width; x++) {
-                const int dst = y * width + x, src = (height - 1 - y) * width + x;
-                buffer[dst] = gpuPixels[src];
-                depthBuffer[dst] = gpuDepth[src] >= 1.0f ? 1.0e30
-                    : 2.0 * f * n / (f + n - (2.0 * gpuDepth[src] - 1.0) * (f - n));
-                if (gpuIds[src] < gpuOwners.size()) gFirstPersonPicks[dst] = gpuOwners[gpuIds[src]];
-                if (gpuProxies[src] < gpuOwners.size()) gFirstPersonInteractionPicks[dst] = gpuOwners[gpuProxies[src]];
-            }
+            std::memcpy(buffer + static_cast<size_t>(y) * width,
+                gpuPixels.data() + static_cast<size_t>(height - 1 - y) * width, width);
+        }
+        constexpr int kReticleWindow = 16; // Covers the 6 px pick assist radius.
+        bool ok = gPickFull ? readPicks(0, 0, width - 1, height - 1, true)
+                            : readPicks(width / 2 - kReticleWindow, height / 2 - kReticleWindow,
+                                width / 2 + kReticleWindow, height / 2 + kReticleWindow, true);
+        if (ok && !gPickFull && gpuHexVisible) {
+            const auto [minX, maxX] = std::minmax_element(gpuHexX, gpuHexX + 6);
+            const auto [minY, maxY] = std::minmax_element(gpuHexY, gpuHexY + 6);
+            ok = readPicks(*minX, *minY, *maxX, *maxY, true);
+        }
+        if (!ok) {
+            gpuRead.close();
+            first_person_render_now();
+            return;
         }
     }
 
@@ -2815,10 +2897,9 @@ static void first_person_render_now()
                     continue;
                 }
 
-                FirstPersonPick candidate =
-                    gFirstPersonPicks[py * width + px];
+                FirstPersonPick candidate = first_person_pick(gFirstPersonPicks, width, px, py);
                 if (candidate.object == nullptr) {
-                    candidate = gFirstPersonInteractionPicks[py * width + px];
+                    candidate = first_person_pick(gFirstPersonInteractionPicks, width, px, py);
                 }
                 if (candidate.object == nullptr
                     || FID_TYPE(candidate.object->fid) == OBJ_TYPE_WALL) {
@@ -2846,6 +2927,15 @@ static void first_person_render_now()
                 }
             }
 
+            // The attack treatment marks the target's own pixels, so read
+            // back its bounds before closing the GPU session.
+            if (gpuRead.open && !gPickFull && maxPickX >= minPickX && maxPickY >= minPickY
+                && first_person_mode() == GAME_MOUSE_MODE_CROSSHAIR
+                && FID_TYPE(hoverPick.object->fid) == OBJ_TYPE_CRITTER) {
+                readPicks(minPickX, minPickY, maxPickX, maxPickY, false);
+            }
+            gpuRead.close();
+
             if (maxPickX >= minPickX && maxPickY >= minPickY) {
                 const bool attackTarget =
                     first_person_mode() == GAME_MOUSE_MODE_CROSSHAIR
@@ -2864,7 +2954,7 @@ static void first_person_render_now()
                     for (int py = minPickY; py <= maxPickY; py++) {
                         for (int px = minPickX; px <= maxPickX; px++) {
                             const FirstPersonPick pick =
-                                gFirstPersonPicks[py * width + px];
+                                first_person_pick(gFirstPersonPicks, width, px, py);
                             if (pick.object == hoverPick.object
                                 && pick.id == hoverPick.id
                                 && ((px + py) & 1) == 0) {
@@ -3660,10 +3750,44 @@ int first_person_sweep_map(std::FILE* out, const char* mapName, void (*progress)
                 gFirstPersonHeading = heading;
                 gFirstPersonPitchDegrees = 0.0;
                 gFirstPersonCameraRevision++;
+                // Timed as the game renders (windowed GPU readback), then again
+                // with a full readback for coverage; picks inside every window
+                // the first frame read must match the full frame's.
+                gFirstPersonFullReadback = false;
                 const Uint64 start = SDL_GetPerformanceCounter();
                 first_person_render_now();
                 const double ms = (SDL_GetPerformanceCounter() - start) * 1000.0
                     / static_cast<double>(SDL_GetPerformanceFrequency());
+                const std::vector<FirstPersonPickRect> windows = gPickFull
+                    ? std::vector<FirstPersonPickRect> {}
+                    : gPickRects;
+                std::vector<FirstPersonPick> windowPicks;
+                for (const FirstPersonPickRect& r : windows) {
+                    for (int y = r.top; y <= r.bottom; y++) {
+                        for (int x = r.left; x <= r.right; x++) {
+                            windowPicks.push_back(gFirstPersonPicks[static_cast<size_t>(y) * gPickWidth + x]);
+                            windowPicks.push_back(gFirstPersonInteractionPicks[static_cast<size_t>(y) * gPickWidth + x]);
+                        }
+                    }
+                }
+                gFirstPersonFullReadback = true;
+                gFirstPersonCameraRevision++;
+                first_person_render_now();
+                gFirstPersonFullReadback = false;
+                int mismatches = 0;
+                size_t next = 0;
+                for (const FirstPersonPickRect& r : windows) {
+                    for (int y = r.top; y <= r.bottom; y++) {
+                        for (int x = r.left; x <= r.right; x++) {
+                            const size_t i = static_cast<size_t>(y) * gPickWidth + x;
+                            const FirstPersonPick& exact = windowPicks[next++];
+                            const FirstPersonPick& proxy = windowPicks[next++];
+                            mismatches += exact.object != gFirstPersonPicks[i].object || exact.id != gFirstPersonPicks[i].id;
+                            mismatches += proxy.object != gFirstPersonInteractionPicks[i].object
+                                || proxy.id != gFirstPersonInteractionPicks[i].id;
+                        }
+                    }
+                }
                 size_t covered = 0;
                 std::vector<int> ids;
                 for (const FirstPersonPick& pick : gFirstPersonPicks) {
@@ -3675,8 +3799,9 @@ int first_person_sweep_map(std::FILE* out, const char* mapName, void (*progress)
                 ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
                 const double coverage = gFirstPersonPicks.empty() ? -1.0
                     : static_cast<double>(covered) / gFirstPersonPicks.size();
-                std::fprintf(out, "FRAME\t%s\t%d\t%d\t%d\t%.2f\t%.3f\t%zu\t%s\n", mapName, elevation,
-                    spot, heading, ms, coverage, ids.size(), gFirstPersonLastFrameGpu ? "gpu" : "software");
+                std::fprintf(out, "FRAME\t%s\t%d\t%d\t%d\t%.2f\t%.3f\t%zu\t%s\t%zu\t%d\n", mapName, elevation,
+                    spot, heading, ms, coverage, ids.size(), gFirstPersonLastFrameGpu ? "gpu" : "software",
+                    windows.size(), mismatches);
                 frames++;
                 progress();
             }

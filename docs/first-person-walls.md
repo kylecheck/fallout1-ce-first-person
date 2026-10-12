@@ -1419,3 +1419,24 @@ calls before unloading, now turns first person off first. The sweep ends the
 same way (frame pending, unload, present) and writes `UNLOADED first_person=0`.
 The freed memory was still readable in the headless run, so that run checks
 the state rather than reproducing the crash.
+
+### Windowed GPU pick readback
+
+The Deck profile showed about 10-11 ms per frame in the GPU readback: full
+colour, depth and two full-screen id buffers (about 13 MB at 1280x800). Colour
+is still read in full, because the HUD draws over it, but ids, proxies and depth
+are now read only where the frame uses them: a 33x33 window at the reticle
+(input always picks there, and hover searches 6 px around it), the target-hex
+outline's bounds (its depth test) and, in attack mode, the hovered critter's
+bounds (the pixels its treatment marks). `first_person_pick` returns an empty
+pick outside the windows read this frame; the software renderer still writes
+every pixel. Because the GPU path overwrites what it reads back, it no longer
+clears the full-screen pick and depth buffers each frame (about 4 ms in setup).
+`first_person_world_gpu_finish`, `_read_region` and `_end` split the readback;
+`first_person_world_gpu_read` remains the full read.
+
+The sweep renders every view twice: windowed, as the game does (its `ms`), then
+with a full readback for coverage, and counts pixels inside the windowed
+frame's windows whose picks differ (`pickWindows pickMismatches`). All frames
+must report 0 mismatches.
+

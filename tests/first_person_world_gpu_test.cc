@@ -36,6 +36,30 @@ int main(){
     assert(c[at(40,20)]==22 && ids[at(40,20)]==23);
     assert(c[at(28,28)]==31 && ids[at(28,28)]==29 && p[at(28,28)]==0);
     assert(d[at(28,28)]<d[at(40,20)]);
+    // Partial readback: the same frame, colour in full, ids/proxies/depth
+    // for a top-down rectangle only, matching the full read pixel for pixel.
+    assert(first_person_world_gpu_begin(64,64,32,3,4));
+    quad(8,8,56,56,4,&back,1,1,17);
+    quad(16,16,48,48,2,front,2,2,23);
+    quad(16,16,48,48,2,nullptr,0,0,23,true);
+    quad(24,24,32,32,1,&wall,1,1,29);
+    std::vector<unsigned char> c2(4096);
+    assert(first_person_world_gpu_finish(c2.data()));
+    assert(c2==c);
+    constexpr int rx=10,ry=18,rw=30,rh=14;
+    std::vector<float> rd(rw*rh);std::vector<unsigned> rids(rw*rh),rp(rw*rh,99);
+    assert(first_person_world_gpu_read_region(rx,ry,rw,rh,rd.data(),rids.data(),rp.data()));
+    for(int y=0;y<rh;y++) for(int x=0;x<rw;x++) {
+        assert(rids[y*rw+x]==ids[at(rx+x,ry+y)]);
+        assert(rp[y*rw+x]==p[at(rx+x,ry+y)]);
+        assert(rd[y*rw+x]==d[at(rx+x,ry+y)]);
+    }
+    std::vector<unsigned> only(rw*rh,7);
+    assert(first_person_world_gpu_read_region(rx,ry,rw,rh,nullptr,only.data(),nullptr));
+    assert(only==rids);
+    assert(!first_person_world_gpu_read_region(60,60,8,8,nullptr,only.data(),nullptr)); // Outside the frame.
+    first_person_world_gpu_end();
+    assert(SDL_GL_GetCurrentContext()==saved);
     // Resize and near-plane clipping: crossing vertices must not drop a face.
     assert(first_person_world_gpu_begin(32,32,16,3,4));
     FirstPersonGpuVertex crossing[4]={{-1,-1,0.2f,0,0},{40,8,2,1,0},
@@ -54,5 +78,5 @@ int main(){
     SDL_GL_DeleteContext(saved);
     SDL_DestroyWindow(presentation);
     SDL_Quit();
-    std::puts("GPU indexed color, depth, transparency and occluded pick tests passed");
+    std::puts("GPU indexed color, depth, transparency, occluded pick and partial readback tests passed");
 }

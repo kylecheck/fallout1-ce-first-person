@@ -11,6 +11,15 @@ void first_person_world_gpu_quad(const unsigned char* pixels, int width, int hei
     const FirstPersonGpuVertex* vertices, std::uint32_t owner, bool proxy = false, float farLimit = 128.0f);
 bool first_person_world_gpu_read(unsigned char* indexed, float* depth,
     std::uint32_t* owners, std::uint32_t* proxies);
+// Partial readback: finish draws the proxies and reads the full indexed colour
+// (GL row order, as first_person_world_gpu_read). read_region then reads any of
+// depth, owners and proxies for a top-down rectangle into top-down rows; null
+// outputs are skipped. end restores the previous GL context. On failure
+// finish has already restored it and the backend is disabled.
+bool first_person_world_gpu_finish(unsigned char* indexed);
+bool first_person_world_gpu_read_region(int x, int y, int width, int height,
+    float* depth, std::uint32_t* owners, std::uint32_t* proxies);
+void first_person_world_gpu_end();
 void first_person_world_gpu_shutdown();
 }
 #endif
