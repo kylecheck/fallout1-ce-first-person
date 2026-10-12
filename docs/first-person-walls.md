@@ -1517,7 +1517,7 @@ in the void around the map) and, for each full-readback frame, samples every
 4th pixel: `leakVoid` is the share whose floor- or wall-height surface lies 3+
 hexes from walkable space (seen through a gap; ceiling over rock is not a
 leak), `leakSky` the share with no surface at all while the camera is under a
-ceiling. `REACH map elevation reachable edgeReachable` rows, and `solidFaces`
+ceiling. `REACH map elevation reachable edgeReachable edgeMargin` rows, and `solidFaces`
 and `sealFaces` per frame, go with them. `FALLOUT_FP_REACH_TRACE=1` traces the
 path from the entrance to the map edge when the walkable area reaches it.
 
@@ -1532,10 +1532,16 @@ transparency.
 
 ### Interior ceilings
 
-On elevations without roof tiles, when the walkable area does not reach the map
-edge (a vault level, a cave), every square within 7 hexes of it gets a ceiling,
-so the ceiling also covers the tops of rock and wall masses. The enclosed-pocket
-ceilings remain for areas that do reach the edge.
+On elevations without roof tiles, when the walkable area does not come within
+16 hexes of the map edge (a vault level, a cave), every square within 7 hexes of
+it gets a ceiling, so the ceiling also covers the tops of rock and wall masses.
+The enclosed-pocket ceilings remain for areas that do reach the edge.
+
+Outdoor maps keep a few unwalkable rows at the edge, so their walkable area never
+touches it: requiring the edge itself roofed the desert encounters. On all 72
+stock maps the walkable area of an outdoor elevation comes within 2-12 hexes of
+the edge (0 where it reaches it) and that of an interior stays 28 or more inside
+(the sweep's `REACH` rows now end with that margin).
 
 ### Seal faces (`first_person_seal.h`)
 

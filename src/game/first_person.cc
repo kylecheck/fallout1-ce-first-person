@@ -1179,7 +1179,9 @@ struct FirstPersonReach {
     std::vector<unsigned char> distance;
     // Hexes whose square has no floor art.
     std::vector<unsigned char> floorless;
-    // Whether the walkable area reaches the map's edge rows (open outdoors).
+    // Whether the walkable area comes near the map's edge (open outdoors).
+    // Outdoor maps keep a few unwalkable rows at the edge (2-12 hexes on the
+    // stock maps); vault levels and caves stay 28 or more hexes inside.
     bool touchesEdge = false;
     // Changes on every recomputation, for caches built from this one.
     int revision = 0;
@@ -1277,18 +1279,21 @@ static const FirstPersonReach& first_person_reach(int elevation)
         if (!any) reach.reachable = everything;
     }
     reach.distance = first_person_reach_distance(reach.reachable, kFirstPersonReachLimit);
+    constexpr int kOutdoorEdgeMargin = 16;
     reach.touchesEdge = false;
-    for (int i = 0; i < 200 && !reach.touchesEdge; i++) {
-        reach.touchesEdge = reach.reachable[i] || reach.reachable[199 * 200 + i] || reach.reachable[i * 200]
-            || reach.reachable[i * 200 + 199];
+    for (int tile = 0; tile < 200 * 200 && !reach.touchesEdge; tile++) {
+        if (!reach.reachable[tile]) continue;
+        const int row = tile / 200;
+        const int column = tile % 200;
+        reach.touchesEdge = std::min({ row, 199 - row, column, 199 - column }) <= kOutdoorEdgeMargin;
     }
     reach.revision++;
     return reach;
 }
 
 // Ceiling squares on an elevation without roof tiles: the enclosed pockets
-// (first_person_enclosed_ceiling) and, when the walkable area does not reach
-// the map edge (underground: a vault level, a cave), every square within a
+// (first_person_enclosed_ceiling) and, when the walkable area does not come
+// near the map edge (underground: a vault level, a cave), every square within a
 // few hexes of it, walls and rock masses included. Elevations with roof tiles
 // get none.
 static const std::vector<unsigned char>& first_person_ceiling_squares(int elevation);
@@ -4479,7 +4484,14 @@ int first_person_sweep_map(std::FILE* out, const char* mapName, void (*progress)
                 seedsOutside += reach.reachable[i] + reach.reachable[199 * 200 + i] + reach.reachable[i * 200]
                     + reach.reachable[i * 200 + 199];
             }
-            std::fprintf(out, "REACH\t%s\t%d\t%d\t%d\n", mapName, elevation, reachable, seedsOutside);
+            int margin = 200;
+            for (int tile = 0; tile < kFirstPersonTileCount; tile++) {
+                if (!reach.reachable[tile]) continue;
+                const int row = tile / 200;
+                const int column = tile % 200;
+                margin = std::min({ margin, row, 199 - row, column, 199 - column });
+            }
+            std::fprintf(out, "REACH\t%s\t%d\t%d\t%d\t%d\n", mapName, elevation, reachable, seedsOutside, margin);
             // FALLOUT_FP_REACH_TRACE=1: where the flood from the entrance first
             // leaves walled space, as the path to the map edge and its objects.
             static const bool trace = std::getenv("FALLOUT_FP_REACH_TRACE") != nullptr;
