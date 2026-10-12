@@ -1660,7 +1660,7 @@ static void first_person_render_now()
             || wall->tile >= kHexGridWidth * kHexGridWidth
             || (wall->flags & OBJECT_HIDDEN) != 0
             || FID_TYPE(wall->fid) != OBJ_TYPE_WALL
-            || tile_dist(obj_dude->tile, wall->tile) > kTopologyRadius) {
+            || first_person_hex_distance(obj_dude->tile, wall->tile) > kTopologyRadius) {
             continue;
         }
 
@@ -1730,7 +1730,7 @@ static void first_person_render_now()
         const bool damagedPanel = std::strcmp(sceneryArt, "v13secr4.frm") == 0;
         if ((std::strcmp(sceneryArt, "v13secr6.frm") == 0 || damagedPanel)
             && (object->flags & OBJECT_HIDDEN) == 0
-            && tile_dist(obj_dude->tile, object->tile) <= kRenderRadius) {
+            && first_person_hex_distance(obj_dude->tile, object->tile) <= kRenderRadius) {
             double worldX;
             double worldY;
             tileToWorld(object->tile, &worldX, &worldY);
@@ -1749,7 +1749,7 @@ static void first_person_render_now()
             doorTiles.push_back(object->tile);
 
             if ((object->flags & OBJECT_HIDDEN) == 0
-                && tile_dist(obj_dude->tile, object->tile) <= kRenderRadius) {
+                && first_person_hex_distance(obj_dude->tile, object->tile) <= kRenderRadius) {
                 double doorWorldX;
                 double doorWorldY;
                 tileToWorld(object->tile, &doorWorldX, &doorWorldY);
@@ -2131,7 +2131,7 @@ static void first_person_render_now()
     // continuation wall's clean straight material. This avoids folding one
     // isometric corner sprite around two perpendicular first-person planes.
     for (const FirstPersonWallSprite& wall : renderedWalls) {
-        if (tile_dist(obj_dude->tile, wall.tile) > kRenderRadius) {
+        if (first_person_hex_distance(obj_dude->tile, wall.tile) > kRenderRadius) {
             continue;
         }
         const FirstPersonWallKind wallKind =
