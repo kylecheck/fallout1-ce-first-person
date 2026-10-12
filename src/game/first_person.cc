@@ -2133,16 +2133,22 @@ static void first_person_render_now()
         }
     }
 
-    // First-person doors are structural scenery while closed. Closed doors
-    // occupy the same wall lattice as the opening and participate in depth/pick
-    // testing. Fallout animates doors away from frame 0 while opening; those
-    // non-zero frames are left to the live scenery billboard pass below so the
-    // moving/open door remains visible instead of disappearing from the scene.
-    // Native collision/use logic remains authoritative.
+    // First-person doors are structural scenery. They occupy the same wall
+    // lattice as the opening and participate in depth/pick testing, using
+    // their closed frame as the panel. Native collision/use logic remains
+    // authoritative; only the panel's visible extent follows the animation.
     constexpr double kDoorHeight = 1.55;
     for (const FirstPersonDoorSprite& door : doors) {
+        // Native doors open by animating away from frame 0. Slide the closed
+        // panel into its jamb by that progress instead of switching to the
+        // isometric animation frames.
+        double openness = 0.0;
         if (!door.portal && door.frame != 0) {
-            continue;
+            CacheEntry* doorEntry = nullptr;
+            if (Art* doorArt = art_ptr_lock(door.fid, &doorEntry)) {
+                openness = first_person_door_openness(door.frame, art_frame_max_frame(doorArt));
+                art_ptr_unlock(doorEntry);
+            }
         }
 
         FirstPersonWallMaterial portalMaterial {};
@@ -2263,103 +2269,129 @@ static void first_person_render_now()
                 sourceSegment.u0 = 0.0;
                 sourceSegment.u1 = 1.0;
             }
-            const FirstPersonWallSegment segment = door.portal ? sourceSegment
+            const FirstPersonWallSegment fullSegment = door.portal ? sourceSegment
                 : first_person_overlap_wall_segment(sourceSegment, 0.02);
+            // Pass 0 draws the visible panel. Pass 1 keeps a moving or open
+            // door targetable over its whole doorway, so it can be closed.
+            for (int pass = 0; pass < 2; pass++) {
+                const bool proxyPass = pass == 1;
+                if (proxyPass ? openness <= 0.0 : openness >= 1.0) {
+                    continue;
+                }
+                const FirstPersonWallSegment segment = proxyPass ? fullSegment
+                    : first_person_slide_door_segment(fullSegment, openness);
 
-            const double adx = segment.ax - playerWorldX;
-            const double ady = segment.ay - playerWorldY;
-            const double bdx = segment.bx - playerWorldX;
-            const double bdy = segment.by - playerWorldY;
-            double ax = adx * rightX + ady * rightY;
-            double az = adx * forwardX + ady * forwardY;
-            double bx = bdx * rightX + bdy * rightY;
-            double bz = bdx * forwardX + bdy * forwardY;
+                const double adx = segment.ax - playerWorldX;
+                const double ady = segment.ay - playerWorldY;
+                const double bdx = segment.bx - playerWorldX;
+                const double bdy = segment.by - playerWorldY;
+                double ax = adx * rightX + ady * rightY;
+                double az = adx * forwardX + ady * forwardY;
+                double bx = bdx * rightX + bdy * rightY;
+                double bz = bdx * forwardX + bdy * forwardY;
 
-            double u0 = segment.u0;
-            double u1 = segment.u1;
-            if (!first_person_clip_wall(ax, az, bx, bz, u0, u1, kNearPlane)) {
-                continue;
-            }
-
-            const int screenAX = width / 2 + static_cast<int>(ax * focal / az);
-            const int screenBX = width / 2 + static_cast<int>(bx * focal / bz);
-            const int bottomAY = horizon + static_cast<int>(focal * kEyeHeight / az);
-            const int bottomBY = horizon + static_cast<int>(focal * kEyeHeight / bz);
-            const int topAY = bottomAY - static_cast<int>(focal * planeHeight / az);
-            const int topBY = bottomBY - static_cast<int>(focal * planeHeight / bz);
-
-            const int minX = std::max(0, std::min(screenAX, screenBX));
-            const int maxX = std::min(width - 1, std::max(screenAX, screenBX));
-            const double screenSpan = static_cast<double>(screenBX - screenAX);
-            if (minX > maxX || std::abs(screenSpan) < 1.0) {
-                continue;
-            }
-
-            if (gpuWorld) {
-                const FirstPersonGpuVertex vertices[4] = {
-                    gpuVertex(screenAX, topAY, az, u0, 0.0),
-                    gpuVertex(screenBX, topBY, bz, u1, 0.0),
-                    gpuVertex(screenBX, bottomBY, bz, u1, 1.0),
-                    gpuVertex(screenAX, bottomAY, az, u0, 1.0),
-                };
-                first_person_world_gpu_quad(material->pixels.data(), material->width,
-                    material->height, vertices, gpuOwner(door.object));
-                continue;
-            }
-
-            const double invAz = 1.0 / az;
-            const double invBz = 1.0 / bz;
-            for (int screenX = minX; screenX <= maxX; screenX++) {
-                const double s = (screenX - screenAX) / screenSpan;
-                if (s < 0.0 || s > 1.0) {
+                double u0 = segment.u0;
+                double u1 = segment.u1;
+                if (!first_person_clip_wall(ax, az, bx, bz, u0, u1, kNearPlane)) {
                     continue;
                 }
 
-                const double invZ = invAz + (invBz - invAz) * s;
-                if (invZ <= 0.0) {
+                const int screenAX = width / 2 + static_cast<int>(ax * focal / az);
+                const int screenBX = width / 2 + static_cast<int>(bx * focal / bz);
+                const int bottomAY = horizon + static_cast<int>(focal * kEyeHeight / az);
+                const int bottomBY = horizon + static_cast<int>(focal * kEyeHeight / bz);
+                const int topAY = bottomAY - static_cast<int>(focal * planeHeight / az);
+                const int topBY = bottomBY - static_cast<int>(focal * planeHeight / bz);
+
+                const int minX = std::max(0, std::min(screenAX, screenBX));
+                const int maxX = std::min(width - 1, std::max(screenAX, screenBX));
+                const double screenSpan = static_cast<double>(screenBX - screenAX);
+                if (minX > maxX || std::abs(screenSpan) < 1.0) {
                     continue;
                 }
 
-                const double z = 1.0 / invZ;
-                const double worldT =
-                    ((1.0 - s) * u0 * invAz + s * u1 * invBz) / invZ;
-                const int bottom = static_cast<int>(
-                    bottomAY + (bottomBY - bottomAY) * s);
-                const int top = static_cast<int>(
-                    topAY + (topBY - topAY) * s);
-                const int columnHeight = bottom - top;
-                if (columnHeight <= 0) {
+                if (gpuWorld) {
+                    const FirstPersonGpuVertex vertices[4] = {
+                        gpuVertex(screenAX, topAY, az, u0, 0.0),
+                        gpuVertex(screenBX, topBY, bz, u1, 0.0),
+                        gpuVertex(screenBX, bottomBY, bz, u1, 1.0),
+                        gpuVertex(screenAX, bottomAY, az, u0, 1.0),
+                    };
+                    if (proxyPass) {
+                        first_person_world_gpu_quad(nullptr, 0, 0, vertices, gpuOwner(door.object), true);
+                    } else {
+                        first_person_world_gpu_quad(material->pixels.data(), material->width,
+                            material->height, vertices, gpuOwner(door.object));
+                    }
                     continue;
                 }
 
-                const int materialX = std::clamp(
-                    static_cast<int>(std::lround(
-                        std::clamp(worldT, 0.0, 1.0)
-                        * std::max(0, material->width - 1))),
-                    0,
-                    std::max(0, material->width - 1));
-
-                for (int screenY = std::max(0, top);
-                     screenY <= std::min(height - 1, bottom);
-                     screenY++) {
-                    const int materialY = std::clamp(
-                        (screenY - top) * material->height / columnHeight,
-                        0,
-                        std::max(0, material->height - 1));
-                    const unsigned char pixel =
-                        material->pixels[materialY * material->width + materialX];
-                    if (pixel == 0) {
+                const double invAz = 1.0 / az;
+                const double invBz = 1.0 / bz;
+                for (int screenX = minX; screenX <= maxX; screenX++) {
+                    const double s = (screenX - screenAX) / screenSpan;
+                    if (s < 0.0 || s > 1.0) {
                         continue;
                     }
 
-                    const int destination = screenY * width + screenX;
-                    if (z < depthBuffer[destination]) {
-                        buffer[destination] = pixel;
-                        depthBuffer[destination] = z;
-                        gFirstPersonPicks[destination] = {
-                            door.object,
-                            door.object->id,
-                        };
+                    const double invZ = invAz + (invBz - invAz) * s;
+                    if (invZ <= 0.0) {
+                        continue;
+                    }
+
+                    const double z = 1.0 / invZ;
+                    const double worldT =
+                        ((1.0 - s) * u0 * invAz + s * u1 * invBz) / invZ;
+                    const int bottom = static_cast<int>(
+                        bottomAY + (bottomBY - bottomAY) * s);
+                    const int top = static_cast<int>(
+                        topAY + (topBY - topAY) * s);
+                    const int columnHeight = bottom - top;
+                    if (columnHeight <= 0) {
+                        continue;
+                    }
+
+                    const int materialX = std::clamp(
+                        static_cast<int>(std::lround(
+                            std::clamp(worldT, 0.0, 1.0)
+                            * std::max(0, material->width - 1))),
+                        0,
+                        std::max(0, material->width - 1));
+
+                    for (int screenY = std::max(0, top);
+                         screenY <= std::min(height - 1, bottom);
+                         screenY++) {
+                        const int materialY = std::clamp(
+                            (screenY - top) * material->height / columnHeight,
+                            0,
+                            std::max(0, material->height - 1));
+                        const int destination = screenY * width + screenX;
+                        if (proxyPass) {
+                            if (z <= depthBuffer[destination] + 0.0001
+                                && z < interactionDepth[destination]) {
+                                interactionDepth[destination] = z;
+                                gFirstPersonInteractionPicks[destination] = {
+                                    door.object,
+                                    door.object->id,
+                                };
+                            }
+                            continue;
+                        }
+
+                        const unsigned char pixel =
+                            material->pixels[materialY * material->width + materialX];
+                        if (pixel == 0) {
+                            continue;
+                        }
+
+                        if (z < depthBuffer[destination]) {
+                            buffer[destination] = pixel;
+                            depthBuffer[destination] = z;
+                            gFirstPersonPicks[destination] = {
+                                door.object,
+                                door.object->id,
+                            };
+                        }
                     }
                 }
             }
@@ -2405,11 +2437,9 @@ static void first_person_render_now()
             if (PID_TYPE(object->pid) == OBJ_TYPE_SCENERY
                 && proto_ptr(object->pid, &sceneryProto) == 0
                 && sceneryProto != nullptr
-                && sceneryProto->scenery.type == SCENERY_TYPE_DOOR
-                && object->frame == 0) {
-                // Closed doors have their own structural pass above. Once the
-                // native door animation advances, keep rendering the live FRM
-                // as scenery instead of making the door vanish completely.
+                && sceneryProto->scenery.type == SCENERY_TYPE_DOOR) {
+                // Doors, closed, moving or open, are drawn by the structural
+                // door pass above as a sliding panel.
                 continue;
             }
         }

@@ -34,5 +34,25 @@ inline int first_person_doorway_gap(const char* a, int tileA, unsigned int flags
     return -1;
 }
 
+// How far a native door animation has progressed: frame 0 is closed and the
+// last frame fully open, as obj_is_open and the door animations use them.
+inline double first_person_door_openness(int frame, int frameCount)
+{
+    if (frame <= 0) return 0.0;
+    if (frameCount <= 1) return 1.0;
+    const double openness = static_cast<double>(frame) / (frameCount - 1);
+    return openness < 0.0 ? 0.0 : (openness > 1.0 ? 1.0 : openness);
+}
+
+// The visible part of a door panel slid toward its b end by openness: the
+// panel's leading edge stays in view, the rest has entered the jamb.
+inline FirstPersonWallSegment first_person_slide_door_segment(const FirstPersonWallSegment& segment, double openness)
+{
+    return { segment.ax + (segment.bx - segment.ax) * openness,
+        segment.ay + (segment.by - segment.ay) * openness,
+        segment.bx, segment.by,
+        segment.u0, segment.u0 + (segment.u1 - segment.u0) * (1.0 - openness) };
+}
+
 } // namespace fallout
 #endif

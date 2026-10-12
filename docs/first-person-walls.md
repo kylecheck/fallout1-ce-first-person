@@ -1332,3 +1332,15 @@ Across all maps 28 of 34 roofed elevations peak at (0,0); the rest are small or
 partial roofs with narrow margins (for example 52 against 56), VIPERS
 being the clearest exception. Sweep frame times were unchanged.
 
+### Sliding doors
+
+Native doors open by animating away from frame 0; `obj_is_open` and collision
+follow that. Doors no longer fall back to their isometric animation frames as
+billboards. The structural door pass keeps the closed frame as the panel and
+slides it toward its far jamb by the animation's progress (frame divided by the
+last frame), so a fully open door leaves the doorway clear and closing plays
+the slide in reverse. While a door is moving or open, an invisible interaction
+proxy over its whole doorway keeps it targetable, so it can be closed. Portal
+scenery (v13secr4/6) is unchanged. `tests/first_person_doorway_test.cc` covers
+progress and the slid segment.
+
