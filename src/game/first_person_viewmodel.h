@@ -274,18 +274,20 @@ inline FirstPersonViewmodelPose first_person_viewmodel_pose(int animationCode, F
     const FirstPersonViewmodelKind kind = first_person_viewmodel_kind(animationCode);
     FirstPersonViewmodelPose pose {};
     if (kind == FIRST_PERSON_VIEWMODEL_GUN) {
-        double length = 0.42;
-        if (animationCode == 6) length = 0.46;
-        if (animationCode == 7 || animationCode == 8) length = 0.85;
-        if (animationCode == 9 || animationCode == 10) length = 0.95;
-        pose = { 0.26, -0.22, 0.70, -0.42, 0.05, 1.0, 0.05, 1.0, 0.0, length };
+        double length = 0.30;
+        if (animationCode == 6) length = 0.33;
+        if (animationCode == 7 || animationCode == 8) length = 0.60;
+        if (animationCode == 9 || animationCode == 10) length = 0.68;
+        pose = { 0.24, -0.21, 0.72, -0.42, 0.05, 1.0, 0.05, 1.0, 0.0, length };
     } else if (kind == FIRST_PERSON_VIEWMODEL_MELEE) {
-        double length = 0.42;
-        if (animationCode == 3 || animationCode == 4) length = 0.85;
-        if (animationCode == 2) length = 0.6;
-        pose = { 0.26, -0.20, 0.62, -0.30, 0.65, 0.70, -0.55, 0.35, 0.0, length };
+        // Raised from the lower right, tipped forward, with its flat side
+        // (a blade, a hammer's face) turned to the viewer.
+        double length = 0.30;
+        if (animationCode == 3 || animationCode == 4) length = 0.60;
+        if (animationCode == 2) length = 0.42;
+        pose = { 0.24, -0.22, 0.66, -0.25, 0.85, 0.45, -1.0, 0.0, 0.0, length };
     } else {
-        pose = { 0.18, -0.17, 0.60, 0.92, 0.18, -0.25, 0.0, 1.0, 0.0, 0.26 };
+        pose = { 0.17, -0.17, 0.60, 0.92, 0.18, -0.25, 0.0, 1.0, 0.0, 0.15 };
     }
     switch (stance) {
     case FIRST_PERSON_VIEWMODEL_LOWERED:
@@ -353,7 +355,9 @@ FirstPersonViewmodelImage first_person_viewmodel_render(const unsigned char* pix
     const double sx = ly * uz - lz * uy;
     const double sy = lz * ux - lx * uz;
     const double sz = lx * uy - ly * ux;
-    const double scale = pose.length / axis.length;
+    // length is the item's largest extent, along or across its axis (an
+    // upright bottle is longer across the level axis than along it).
+    const double scale = pose.length / std::max(axis.length, axis.breadth);
     // Frame "up" (toward smaller y, across the axis).
     double frameUpX = axis.axisY;
     double frameUpY = -axis.axisX;

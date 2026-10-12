@@ -1664,8 +1664,10 @@ and the side walls the edge pixels. Faces are shaded through the native
 `intensityColorTable` by a light from the upper left (front faces 0.88-1.23
 of full, walls 0.62-0.97), so the image stays in the game palette.
 
-The item is turned to point into the view, low and right of centre for guns
-(Doom/Quake-style), angled up for melee, held up in front for other items. The
+The item is scaled by its largest extent (pistols 0.30 camera units, rifles
+0.60, hand items 0.15) and turned to point into the view, low and right of centre for guns
+(Doom/Quake-style), raised for melee with the flat side (blade, hammer face)
+to the viewer, held up in front for other items. The
 leading end comes from the art: the moment axis of the opaque pixels (left
 level for items and compact shapes such as pistols, whose grip pulls it
 diagonal), then for guns the end away from the broader one (grip or stock),
