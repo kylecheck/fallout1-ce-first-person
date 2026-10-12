@@ -157,6 +157,38 @@ int main()
         assert(near(dropped.h[3], -0.25) && near(dropped.h[0], 0.75));
     }
 
+    // Pushing a quad off a wall: a North/South wall along x = 1 from y = 0
+    // to 2, the object on the x < 1 side.
+    {
+        FirstPersonSpriteQuad quad {};
+        const double xs[4] = { 0.5, 1.2, 1.2, 0.5 };
+        for (int i = 0; i < 4; i++) {
+            quad.x[i] = xs[i];
+            quad.y[i] = 1.0;
+        }
+        const double moved = first_person_sprite_push_off_wall(quad, 1.0, 0.0, 1.0, 2.0, 0.0, 1.0, 0.05, 0.3);
+        assert(near(moved, 0.25));
+        assert(near(quad.x[1], 0.95) && near(quad.x[0], 0.25));
+        // Already clear: nothing moves.
+        assert(near(first_person_sprite_push_off_wall(quad, 1.0, 0.0, 1.0, 2.0, 0.0, 1.0, 0.05, 0.3), 0.0));
+        // Beside the wall's end, out of reach: nothing moves.
+        FirstPersonSpriteQuad past {};
+        for (int i = 0; i < 4; i++) {
+            past.x[i] = xs[i];
+            past.y[i] = 3.0;
+        }
+        assert(near(first_person_sprite_push_off_wall(past, 1.0, 0.0, 1.0, 2.0, 0.0, 1.0, 0.05, 0.3), 0.0));
+        // The side comes from the object, whichever way the segment runs.
+        FirstPersonSpriteQuad other {};
+        const double otherXs[4] = { 1.5, 0.8, 0.8, 1.5 };
+        for (int i = 0; i < 4; i++) {
+            other.x[i] = otherXs[i];
+            other.y[i] = 1.0;
+        }
+        assert(near(first_person_sprite_push_off_wall(other, 1.0, 2.0, 1.0, 0.0, 2.0, 1.0, 0.05, 0.3), 0.25));
+        assert(near(other.x[1], 1.05));
+    }
+
     // Ray hits: a quad 4 units ahead spanning x -1..1, height -1..1 around
     // the eye's line, camera space (x right, y up, z forward).
     {

@@ -276,7 +276,10 @@ inline FirstPersonSpriteBoxFit first_person_sprite_box_fit(const unsigned char* 
     box.maxHeight = sorted[columns - 1];
     int following = 0;
     for (double rise : rises) following += std::abs(rise - box.height) <= 4.0;
-    if (box.height < 4.0 || following * 10 < columns * 6) return FirstPersonSpriteBoxFit {};
+    // Big furniture may raise up to half its top (a headboard, a hutch); a
+    // small piece with that much raised is a chair, which as a box smears.
+    const int needed = columns >= 64 ? 5 : 6;
+    if (box.height < 4.0 || following * 10 < columns * needed) return FirstPersonSpriteBoxFit {};
     // The footprint's back corner must lie above the front corner.
     if (first_person_sprite_box_back_y(box, box.leftX + box.rightX - box.frontX) > box.frontY) {
         return FirstPersonSpriteBoxFit {};
@@ -425,6 +428,41 @@ inline FirstPersonSpriteQuad first_person_sprite_leaning_quad(double anchorX, do
         quad.h[corner] = s * cosine;
     }
     return quad;
+}
+
+// Moves a quad straight off a wall segment (a to b) to the side point
+// (sideX, sideY) is on, so that no corner beside the segment (along it,
+// within reach of its ends) is nearer than margin to the wall's line. Returns
+// the distance moved (0 when nothing was behind or on the wall).
+inline double first_person_sprite_push_off_wall(FirstPersonSpriteQuad& quad, double ax, double ay,
+    double bx, double by, double sideX, double sideY, double margin, double reach)
+{
+    const double dx = bx - ax;
+    const double dy = by - ay;
+    const double length = std::sqrt(dx * dx + dy * dy);
+    if (length < 1.0e-9) return 0.0;
+    const double ux = dx / length;
+    const double uy = dy / length;
+    double nx = -uy;
+    double ny = ux;
+    if ((sideX - ax) * nx + (sideY - ay) * ny < 0.0) {
+        nx = -nx;
+        ny = -ny;
+    }
+    double push = 0.0;
+    for (int corner = 0; corner < 4; corner++) {
+        const double px = quad.x[corner] - ax;
+        const double py = quad.y[corner] - ay;
+        const double along = px * ux + py * uy;
+        if (along < -reach || along > length + reach) continue;
+        push = std::max(push, margin - (px * nx + py * ny));
+    }
+    if (push <= 0.0) return 0.0;
+    for (int corner = 0; corner < 4; corner++) {
+        quad.x[corner] += nx * push;
+        quad.y[corner] += ny * push;
+    }
+    return push;
 }
 
 // The point at texture (u, v) on a quad.

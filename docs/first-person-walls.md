@@ -1608,7 +1608,9 @@ data and the art's own outline (no per-asset lists):
   the outline's bottom closest, reaching it near all three corners (side
   corners up to 12 px in, since table tops overhang their legs), and the
   height as the median rise from the footprint's back edges to the outline's
-  top, which must follow them over 60% of columns. The box stands at the
+  top, which must follow them over 60% of columns (50% for pieces 64+ px
+  wide, so beds with headboards and tables with raised parts qualify; small
+  pieces with that much raised are chairs, which smear as boxes). The box stands at the
   footprint the V shows, in the floor's isometric scale and 60 px per unit
   of height: two front faces, the top, and two fins along the back edges
   where art rises above the top (headboards). Each face shows the frame
@@ -1621,7 +1623,12 @@ data and the art's own outline (no per-asset lists):
 - Everything else turns toward the viewer and leans back by the native camera's
   angle (25.7°), pivoting about the middle of its visible height, so the front
   comes forward and the top goes back (each by at most 0.35). Items still rest
-  their lowest visible pixel on the floor.
+  their lowest visible pixel on the floor. Turned toward the viewer, a card
+  beside a wall swings into it (the round Shady Sands stoves were cut in half
+  by the hut wall), so it is moved straight out from every wall segment
+  within 3 hexes that a corner beside the segment comes within 0.05 of, on
+  the object's side (the native camera's side for objects on the wall line);
+  a wall needing more than 0.8 is across the object and is ignored.
 - Loose items (anything but containers: weapons, ammo, bags) always lean, even
   when flagged flat (bags, ammo and packs are): laid on the floor a loot pile
   read as a squashed rug. Container items (desks, lockers, shelves) are

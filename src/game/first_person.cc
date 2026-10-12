@@ -3182,8 +3182,32 @@ static void first_person_render_now()
                 const double drop = object.type == OBJ_TYPE_ITEM && opaqueMaxY >= 0
                     ? static_cast<double>(frame->height - 1 - opaqueMaxY) / frame->height
                     : 0.0;
-                wholeFrame(first_person_sprite_leaning_quad(hexX, hexY, playerWorldX, playerWorldY,
-                    worldWidth, worldHeight, drop, kFirstPersonIsoLean, 0.35));
+                FirstPersonSpriteQuad quad = first_person_sprite_leaning_quad(hexX, hexY, playerWorldX, playerWorldY,
+                    worldWidth, worldHeight, drop, kFirstPersonIsoLean, 0.35);
+                // Turned toward the viewer, a card next to a wall swings into
+                // it (stoves against a hut wall): move it out in front of
+                // every nearby wall segment it crosses. The object's side is
+                // its hex centre, or the native camera's side for an object
+                // standing on the wall line. A wall needing a large move is
+                // across the object rather than behind it and is left alone.
+                for (const FirstPersonWallSprite& wall : walls) {
+                    if (first_person_hex_distance(wall.tile, native->tile) > 3) continue;
+                    for (const FirstPersonWallSegment& segment : first_person_wall_segments(
+                             wall.tile, wall.extendedFlags, wall.direction, wall.worldX, wall.worldY)) {
+                        const double sx = segment.bx - segment.ax;
+                        const double sy = segment.by - segment.ay;
+                        const double length = std::sqrt(sx * sx + sy * sy);
+                        if (length < 1.0e-9) continue;
+                        const double offLine = ((hexX - segment.ax) * -sy + (hexY - segment.ay) * sx) / length;
+                        const double sideX = std::abs(offLine) < 0.05 ? hexX - 0.5 : hexX;
+                        const double sideY = std::abs(offLine) < 0.05 ? hexY + 0.8660254037844386 : hexY;
+                        FirstPersonSpriteQuad moved = quad;
+                        const double push = first_person_sprite_push_off_wall(moved, segment.ax, segment.ay,
+                            segment.bx, segment.by, sideX, sideY, 0.05, 0.3);
+                        if (push > 0.0 && push <= 0.8) quad = moved;
+                    }
+                }
+                wholeFrame(quad);
             }
 
             // Camera space: x right, y up from the eye, z forward.
