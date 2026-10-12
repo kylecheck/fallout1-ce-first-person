@@ -515,6 +515,8 @@ bool first_person_action_menu_active() { return gFirstPersonActionMenuActive; }
 // Command code for the action menu's stimpak entry, handled here rather than
 // through the input buffer.
 static constexpr int kFirstPersonUseStimpak = -1000;
+static constexpr int kFirstPersonCheatNext = -1001;
+static constexpr int kFirstPersonCheatPrevious = -1002;
 
 // Uses a carried stimpak as the inventory would: in combat it costs the AP
 // the inventory charges for opening (4, less Quick Pockets), and healing goes
@@ -548,6 +550,65 @@ static void first_person_use_stimpak()
     intface_update_hit_points(true);
 }
 
+// Opt-in test cheat (FALLOUT_FP_CHEATS=1): puts the next (or previous)
+// weapon or drug proto in the active hand, created and wielded through native
+// item code, with guns loaded and spare ammo. The previous one stays in the
+// inventory.
+static void first_person_cheat_cycle_item(int step)
+{
+    static std::vector<int> pids;
+    static int at = -1;
+    if (pids.empty()) {
+        const int count = proto_max_id(OBJ_TYPE_ITEM);
+        for (int index = 1; index < count; index++) {
+            const int pid = (OBJ_TYPE_ITEM << 24) | index;
+            Proto* proto = nullptr;
+            if (proto_ptr(pid, &proto) != 0 || proto == nullptr) continue;
+            if (proto->item.type != ITEM_TYPE_WEAPON && proto->item.type != ITEM_TYPE_DRUG) continue;
+            if (proto->item.inventoryFid < 0 || !art_exists(proto->item.inventoryFid)) continue;
+            pids.push_back(pid);
+        }
+    }
+    if (pids.empty() || obj_dude == nullptr) return;
+    at = ((at + step) % static_cast<int>(pids.size()) + static_cast<int>(pids.size())) % static_cast<int>(pids.size());
+    const int pid = pids[at];
+    Proto* proto = nullptr;
+    if (proto_ptr(pid, &proto) != 0 || proto == nullptr) return;
+    Object* item = nullptr;
+    if (obj_new(&item, proto->fid, pid) == -1 || item == nullptr) return;
+    if (item_add_force(obj_dude, item, 1) != 0) {
+        obj_destroy(item);
+        return;
+    }
+    // As scripts do: a carried item leaves the map's object list.
+    Rect rect;
+    obj_disconnect(item, &rect);
+    const int hand = intface_is_item_right_hand();
+    if (proto->item.type == ITEM_TYPE_WEAPON) {
+        item_w_set_curr_ammo(item, item_w_max_ammo(item));
+        const int ammoPid = proto->item.data.weapon.ammoTypePid;
+        Object* ammo = nullptr;
+        if (ammoPid > 0 && proto_ptr(ammoPid, &proto) == 0 && obj_new(&ammo, proto->fid, ammoPid) != -1) {
+            if (item_add_force(obj_dude, ammo, 2) != 0) {
+                obj_destroy(ammo);
+            } else {
+                obj_disconnect(ammo, &rect);
+            }
+        }
+        inven_wield(obj_dude, item, hand);
+    } else {
+        // Native inventory puts a non-weapon in a hand by its flag alone.
+        Object* held = hand == HAND_RIGHT ? inven_right_hand(obj_dude) : inven_left_hand(obj_dude);
+        if (held != nullptr) held->flags &= ~(hand == HAND_RIGHT ? OBJECT_IN_RIGHT_HAND : OBJECT_IN_LEFT_HAND);
+        item->flags |= hand == HAND_RIGHT ? OBJECT_IN_RIGHT_HAND : OBJECT_IN_LEFT_HAND;
+    }
+    intface_update_items(false);
+    static char message[128];
+    std::snprintf(message, sizeof(message), "Cheat: %s in hand (%d/%d).", proto_name(pid), at + 1,
+        static_cast<int>(pids.size()));
+    display_print(message);
+}
+
 void first_person_action_menu()
 {
     if (!first_person_world_input_allowed()) return;
@@ -555,7 +616,10 @@ void first_person_action_menu()
     // A native modal window above the frozen view; command execution happens
     // after closing it, through the same input loop as the original hotkeys.
     struct Command { const char* label; int key; };
-    static const Command commands[] = {
+    static const bool cheats = std::getenv("FALLOUT_FP_CHEATS") != nullptr;
+    static const Command allCommands[] = {
+        { "Cheat: next item in hand", kFirstPersonCheatNext },
+        { "Cheat: previous item", kFirstPersonCheatPrevious },
         { "End turn [Space]", KEY_SPACE },
         { "End combat [Enter]", KEY_RETURN },
         { "Reload [R]", KEY_LOWERCASE_R },
@@ -574,8 +638,10 @@ void first_person_action_menu()
         { "Options [Esc]", KEY_ESCAPE },
         { "Move / interact / attack [M]", KEY_LOWERCASE_M },
     };
-    constexpr int count = sizeof(commands) / sizeof(commands[0]);
-    constexpr int rows = (count + 1) / 2;
+    // The cheat entries lead the list only when enabled.
+    const Command* commands = cheats ? allCommands : allCommands + 2;
+    const int count = static_cast<int>(sizeof(allCommands) / sizeof(allCommands[0])) - (cheats ? 0 : 2);
+    const int rows = (count + 1) / 2;
     const int oldFont = text_curr();
     text_font(101);
     const int w = 520;
@@ -629,6 +695,9 @@ void first_person_action_menu()
     first_person_heap_check("fp-action-menu");
     if (command == kFirstPersonUseStimpak && game_user_wants_to_quit == 0) {
         first_person_use_stimpak();
+        first_person_render();
+    } else if ((command == kFirstPersonCheatNext || command == kFirstPersonCheatPrevious) && game_user_wants_to_quit == 0) {
+        first_person_cheat_cycle_item(command == kFirstPersonCheatNext ? 1 : -1);
         first_person_render();
     } else if (command != -1 && game_user_wants_to_quit == 0) {
         GNW_add_input_buffer(command);
@@ -4509,6 +4578,20 @@ int first_person_sweep_map(std::FILE* out, const char* mapName, void (*progress)
         gFirstPersonCameraRevision++;
         first_person_render_now();
         first_person_viewmodel_preview(viewmodelPreview);
+        // With the cheat on, put every test item in the hand through the
+        // game's own path and render a frame with each.
+        if (std::getenv("FALLOUT_FP_CHEATS") != nullptr) {
+            const int count = proto_max_id(OBJ_TYPE_ITEM);
+            for (int i = 0; i < count; i++) {
+                first_person_cheat_cycle_item(1);
+                gFirstPersonCameraRevision++;
+                first_person_render_now();
+                Object* held = nullptr;
+                const bool holding = intface_get_current_item(&held) == 0 && held != nullptr;
+                std::fprintf(out, "CHEAT\t%s\t%d\n", holding ? proto_name(held->pid) : "-", holding ? held->pid : -1);
+                if (held != nullptr && held->pid == ((OBJ_TYPE_ITEM << 24) | 4) && i > 0) break; // wrapped to the knife
+            }
+        }
     }
     const int startElevation = map_elevation;
     const int startTile = obj_dude->tile;

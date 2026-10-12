@@ -66,3 +66,14 @@ After a successful build:
 cd "/home/deck/.local/share/Steam/steamapps/common/Fallout/" && \
   ~/fallout1-ce-first-person/build/fallout-ce
 ```
+
+## Test cheat (`FALLOUT_FP_CHEATS=1`)
+
+Off by default. When set, the action menu (View/L4) starts with "Cheat: next
+item in hand" and "Cheat: previous item". Each creates the next or previous
+weapon or drug proto through native item code (`obj_new`, `item_add_force`,
+then `obj_disconnect` as scripts do), loads guns to capacity with two spare
+boxes of their ammo, and puts it in the active hand (`inven_wield` for
+weapons, the hand flag for other items, as the inventory does). Earlier
+items stay in the inventory. With the viewmodel preview, the cheat also
+cycles every item through the hand under the sweep (`CHEAT name pid` rows).
