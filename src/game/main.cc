@@ -319,6 +319,11 @@ static int main_loadgame_new()
 // 0x472A40
 static void main_unload_new()
 {
+    // First person presents the loaded map. Leaving the game unloads it, and
+    // later presents (the main menu's palette fade) must not draw it.
+    if (first_person_is_enabled()) {
+        first_person_toggle();
+    }
     obj_turn_off(obj_dude, NULL);
     map_exit();
 }
@@ -393,7 +398,13 @@ static int main_fp_map_sweep(const char* path)
     if (fileListLength != 0) {
         db_free_file_list(&fileList, NULL);
     }
+    // Leave the map the way quitting to the main menu does: with a
+    // first-person frame pending, unload, then present (as the menu's
+    // palette fade does).
+    first_person_render();
     main_unload_new();
+    renderPresent();
+    std::fprintf(out, "UNLOADED\tfirst_person=%d\n", first_person_is_enabled() ? 1 : 0);
     std::fclose(out);
     return 0;
 }

@@ -1407,3 +1407,15 @@ readback stage also absorbs the GPU's own work, since reading back waits for it.
 g++ -std=c++17 -Wall -Wextra -Werror -Isrc tests/first_person_profile_test.cc -o /tmp/fp-profile-test
 /tmp/fp-profile-test
 ```
+
+### Leaving the map with first person on
+
+Quitting to the main menu with first person on crashed in `item_get_type`
+under `first_person_render_now <- first_person_flush_render <- renderPresent
+<- palette_fade_to <- main_menu_show`: closing the options window requested a
+frame, and the menu's palette fade presented it after `map_exit` had freed the
+map's objects. `main_unload_new`, which every route out of the game loop
+calls before unloading, now turns first person off first. The sweep ends the
+same way (frame pending, unload, present) and writes `UNLOADED first_person=0`.
+The freed memory was still readable in the headless run, so that run checks
+the state rather than reproducing the crash.
