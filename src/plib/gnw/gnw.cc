@@ -1,6 +1,7 @@
 #include "plib/gnw/gnw.h"
 
 #include <algorithm>
+#include <cstring>
 
 #include "game/palette.h"
 #include "plib/color/color.h"
@@ -1117,6 +1118,17 @@ unsigned char* win_get_buf(int win)
 }
 
 // 0x4C3984
+int win_get_top_visible_win(int x, int y)
+{
+    for (int index = num_windows - 1; index >= 0; index--) {
+        Window* w = window[index];
+        if ((w->flags & WINDOW_HIDDEN) != 0) continue;
+        if (x >= w->rect.ulx && x <= w->rect.lrx
+            && y >= w->rect.uly && y <= w->rect.lry) return w->id;
+    }
+    return -1;
+}
+
 int win_get_top_win(int x, int y)
 {
     for (int index = num_windows - 1; index >= 0; index--) {

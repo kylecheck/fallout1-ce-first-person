@@ -20,6 +20,11 @@ int text_object_create(Object* object, char* string, int font, int color, int a5
 void text_object_render(Rect* rect);
 int text_object_count();
 void text_object_remove(Object* object);
+// Read-only view of the live floating texts, for first person's speech
+// bubbles: the owner (null when unbounded) and the rendered text image
+// (index 0 transparent). Returns false past the end.
+bool text_object_get(int index, Object** owner, const unsigned char** data, int* width, int* height,
+    unsigned int* time);
 
 } // namespace fallout
 

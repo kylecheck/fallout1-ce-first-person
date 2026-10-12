@@ -1,3 +1,4 @@
+#include "game/first_person.h"
 #include "game/bmpdlog.h"
 
 #include <stdio.h>
@@ -125,6 +126,7 @@ int flgids2[FILE_DIALOG_FRM_COUNT] = {
 // 0x41BE70
 int dialog_out(const char* title, const char** body, int bodyLength, int x, int y, int titleColor, const char* a8, int bodyColor, int flags)
 {
+    FirstPersonModalScope firstPersonModal;
     MessageList messageList;
     MessageListItem messageListItem;
     int savedFont = text_curr();

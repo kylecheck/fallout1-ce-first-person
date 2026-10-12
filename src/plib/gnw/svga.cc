@@ -1,5 +1,9 @@
 #include "plib/gnw/svga.h"
 
+#include "game/first_person_gpu.h"
+#include "game/first_person.h"
+#include "game/first_person_world_gpu.h"
+
 #include "plib/gnw/gnw.h"
 #include "plib/gnw/grbuf.h"
 #include "plib/gnw/mouse.h"
@@ -150,6 +154,7 @@ bool svga_init(VideoOptions* video_options)
 
 void svga_exit()
 {
+    first_person_world_gpu_shutdown();
     destroyRenderer();
 
     if (gSdlWindow != NULL) {
@@ -227,9 +232,11 @@ void handleWindowSizeChanged()
 
 void renderPresent()
 {
+    first_person_flush_render();
     SDL_UpdateTexture(gSdlTexture, NULL, gSdlTextureSurface->pixels, gSdlTextureSurface->pitch);
     SDL_RenderClear(gSdlRenderer);
     SDL_RenderCopy(gSdlRenderer, gSdlTexture, NULL, NULL);
+    first_person_gpu_present();
     SDL_RenderPresent(gSdlRenderer);
 }
 

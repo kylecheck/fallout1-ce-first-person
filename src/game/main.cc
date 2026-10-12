@@ -11,13 +11,23 @@
 // Function names and visibility scope are from in OS X binary.
 
 #include <limits.h>
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <thread>
 #include <stddef.h>
 
+#include "platform_compat.h"
 #include "game/amutex.h"
 #include "game/art.h"
 #include "game/credits.h"
 #include "game/cycle.h"
 #include "game/endgame.h"
+#include "game/first_person.h"
+#include "game/first_person_heap_check.h"
 #include "game/game.h"
 #include "game/gconfig.h"
 #include "game/gmouse.h"
@@ -57,6 +67,7 @@ static int main_load_new(char* fname);
 static int main_loadgame_new();
 static void main_unload_new();
 static void main_game_loop();
+static int main_fp_map_sweep(const char* path);
 static bool main_selfrun_init();
 static void main_selfrun_exit();
 static void main_selfrun_record();
@@ -94,6 +105,13 @@ int gnw_main(int argc, char** argv)
 
     if (!main_init_system(argc, argv)) {
         return 1;
+    }
+
+    if (const char* sweepPath = std::getenv("FALLOUT_FP_MAP_SWEEP")) {
+        const int rc = main_fp_map_sweep(sweepPath);
+        main_exit_system();
+        autorun_mutex_destroy();
+        return rc;
     }
 
     gmovie_play(MOVIE_IPLOGO, GAME_MOVIE_FADE_IN);
@@ -303,8 +321,119 @@ static int main_loadgame_new()
 // 0x472A40
 static void main_unload_new()
 {
+    // First person presents the loaded map. Leaving the game unloads it, and
+    // later presents (the main menu's palette fade) must not draw it.
+    if (first_person_is_enabled()) {
+        first_person_toggle();
+    }
     obj_turn_off(obj_dude, NULL);
     map_exit();
+}
+
+static std::atomic<int> main_fp_sweep_steps { 0 };
+
+// Whether name (case-insensitive) is an entry of the comma-separated list.
+static bool main_fp_sweep_selected(const char* list, const char* name)
+{
+    const size_t length = std::strlen(name);
+    for (const char* entry = list; *entry != '\0';) {
+        const char* end = std::strchr(entry, ',');
+        const size_t entryLength = end != nullptr ? static_cast<size_t>(end - entry) : std::strlen(entry);
+        if (entryLength == length && compat_strnicmp(entry, name, length) == 0) {
+            return true;
+        }
+        if (end == nullptr) {
+            break;
+        }
+        entry = end + 1;
+    }
+    return false;
+}
+
+static void main_fp_sweep_step()
+{
+    main_fp_sweep_steps++;
+}
+
+// Diagnostic (FALLOUT_FP_MAP_SWEEP=<tsv>): loads every map with the premade
+// combat character, skipping menus and movies, and renders first-person frames
+// on each elevation. A MAP row is flushed before each load, so a crash names
+// its map; FALLOUT_FP_MAP_SWEEP_FROM=<index> resumes after one. A map that
+// stops making progress for 60 s (e.g. a script waiting for input) is
+// recorded as STUCK and ends the run.
+static int main_fp_map_sweep(const char* path)
+{
+    std::FILE* out = std::fopen(path, "w");
+    if (out == nullptr) {
+        return 1;
+    }
+    char** fileList;
+    const int fileListLength = db_get_file_list("maps\\*.map", &fileList, NULL, 0);
+    const char* fromValue = std::getenv("FALLOUT_FP_MAP_SWEEP_FROM");
+    const int from = fromValue != nullptr ? std::max(0, std::atoi(fromValue)) : 0;
+    std::fprintf(out, "# MAP index name | FRAME map elevation tile heading ms coverage objects renderer pickWindows pickMismatches leakVoid leakSky solidFaces sealFaces | REACH map elevation reachable edgeReachable | DONE map frames\n");
+    std::fflush(out);
+
+    std::atomic<bool> done { false };
+    std::atomic<int> current { -1 };
+    std::thread watchdog([&]() {
+        int last = -1;
+        int still = 0;
+        while (!done) {
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+            const int steps = main_fp_sweep_steps;
+            if (steps != last) {
+                last = steps;
+                still = 0;
+            } else if (++still >= 60) {
+                const int index = current;
+                std::fprintf(out, "STUCK\t%d\t%s\n", index,
+                    index >= 0 && index < fileListLength ? fileList[index] : "?");
+                std::fflush(out);
+                std::_Exit(3);
+            }
+        }
+    });
+
+    // FALLOUT_FP_SWEEP_MAPS=<A.MAP,B.MAP> limits the sweep to those maps.
+    const char* only = std::getenv("FALLOUT_FP_SWEEP_MAPS");
+    bool loaded = false;
+    proto_dude_init("premade\\combat.gcd");
+    for (int index = from; index < fileListLength; index++) {
+        if (only != nullptr && !main_fp_sweep_selected(only, fileList[index])) {
+            continue;
+        }
+        current = index;
+        std::fprintf(out, "MAP\t%d\t%s\n", index, fileList[index]);
+        std::fflush(out);
+        main_fp_sweep_step();
+        if (!loaded) {
+            main_load_new(fileList[index]);
+            loaded = true;
+        } else {
+            map_load(fileList[index]);
+        }
+        scr_disable();
+        main_fp_sweep_step();
+        const int frames = first_person_sweep_map(out, fileList[index], main_fp_sweep_step);
+        std::fprintf(out, "DONE\t%s\t%d\n", fileList[index], frames);
+        std::fflush(out);
+    }
+
+    done = true;
+    watchdog.join();
+    if (fileListLength != 0) {
+        db_free_file_list(&fileList, NULL);
+    }
+    // Leave the map the way quitting to the main menu does: with a
+    // first-person frame pending, unload, then present (as the menu's
+    // palette fade does).
+    first_person_render();
+    main_unload_new();
+    renderPresent();
+    std::fprintf(out, "UNLOADED\tfirst_person=%d\n", first_person_is_enabled() ? 1 : 0);
+    std::fclose(out);
+    return 0;
 }
 
 // 0x472A54
@@ -323,11 +452,15 @@ static void main_game_loop()
         sharedFpsLimiter.mark();
 
         int keyCode = get_input();
+        first_person_heap_check("loop-get-input");
         game_handle_input(keyCode, false);
+        first_person_heap_check("loop-handle-input");
 
         scripts_check_state();
+        first_person_heap_check("loop-scripts");
 
         map_check_state();
+        first_person_heap_check("loop-map");
 
         if (main_game_paused != 0) {
             main_game_paused = 0;

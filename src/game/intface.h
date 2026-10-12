@@ -51,6 +51,8 @@ int intface_update_items(bool animated);
 int intface_toggle_items(bool animated);
 int intface_toggle_item_state();
 void intface_use_item();
+void intface_reload_current();
+int intface_current_action();
 int intface_is_item_right_hand();
 int intface_get_current_item(Object** itemPtr);
 int intface_update_ammo_lights();

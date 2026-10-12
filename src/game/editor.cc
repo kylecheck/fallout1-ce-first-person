@@ -1,3 +1,4 @@
+#include "game/first_person.h"
 #include "game/editor.h"
 
 #include <assert.h>
@@ -628,6 +629,7 @@ static unsigned char first_skill_list;
 // 0x42C40C
 int editor_design(bool isCreationMode)
 {
+    FirstPersonModalScope firstPersonModal;
     char* messageListItemText;
     char line1[128];
     char line2[128];

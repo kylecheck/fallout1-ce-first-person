@@ -1,4 +1,5 @@
 #include "plib/gnw/dxinput.h"
+#include "game/gamepad.h"
 
 namespace fallout {
 
@@ -64,7 +65,12 @@ bool dxinput_get_mouse_state(MouseData* mouseState)
     SDL_PumpEvents();
 
     Uint32 buttons = SDL_GetRelativeMouseState(&(mouseState->x), &(mouseState->y));
-    mouseState->buttons[0] = (buttons & SDL_BUTTON(SDL_BUTTON_LEFT)) != 0;
+    int gamepadX, gamepadY;
+    bool gamepadLeft;
+    gamepad_mouse_state(&gamepadX, &gamepadY, &gamepadLeft);
+    mouseState->x += gamepadX;
+    mouseState->y += gamepadY;
+    mouseState->buttons[0] = gamepadLeft || (buttons & SDL_BUTTON(SDL_BUTTON_LEFT)) != 0;
     mouseState->buttons[1] = (buttons & SDL_BUTTON(SDL_BUTTON_RIGHT)) != 0;
     mouseState->wheelX = gMouseWheelDeltaX;
     mouseState->wheelY = gMouseWheelDeltaY;

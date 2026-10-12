@@ -1,3 +1,4 @@
+#include "game/first_person.h"
 #include "game/loadsave.h"
 
 #include <assert.h>
@@ -338,6 +339,7 @@ void ResetLoadSave()
 // 0x46D9C4
 int SaveGame(int mode)
 {
+    FirstPersonModalScope firstPersonModal;
     MessageListItem messageListItem;
 
     ls_error_code = 0;
@@ -846,6 +848,7 @@ static int QuickSnapShot()
 // 0x46E754
 int LoadGame(int mode)
 {
+    FirstPersonModalScope firstPersonModal;
     MessageListItem messageListItem;
 
     const char* body[] = {

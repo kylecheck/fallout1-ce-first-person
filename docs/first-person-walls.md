@@ -1,0 +1,1746 @@
+# First-person wall reconstruction
+
+This milestone replaces native-neighbor connection guessing with Fallout's own
+wall prototype classification. It does not change floor/world mapping, input,
+the R5/F11/0 toggle, native movement, mouse targeting, or the shared depth
+buffer.
+
+## What the map snapshot established
+
+The VAULTBUR diagnostic showed that visible walls already carry a structural
+class in the high bits of prototype `extendedFlags` (the engine's Wall Light
+Type field):
+
+- `0x00000000`: north/south
+- `0x08000000`: east/west
+- `0x10000000`: north corner
+- `0x20000000`: south corner
+- `0x40000000`: east corner
+- `0x80000000`: west corner
+
+Low action bits such as `0x2000` are ignored for structural classification.
+
+Long east/west runs in the snapshot alternate between neighboring hex columns.
+Their hex centers therefore zigzag by half a world-Y unit even though the wall
+art represents one straight wall. The renderer now corrects that parity offset
+and emits one straight east/west line. North/south pieces already align on the
+world-Y basis.
+
+The snapshot also contained many `block.frm` wall and scenery objects around
+visible wall runs. Their 1x1 art remains invisible in first person. Wall-type
+blockers are now used only as conservative structural evidence when a chain is
+proven by compatible visible wall geometry on both ends; raw adjacency still
+does not create visible branches.
+
+## Geometry rules
+
+Wall structure is now chosen in this order:
+
+1. Read the wall PRO's `extendedFlags`.
+2. Classify the piece as north/south, east/west, or one of four corner types.
+3. Emit fixed world-space geometry from that class and the established tile
+   world mapping.
+4. Camera transform, near-plane clipping and depth rasterization happen only
+   after structural geometry exists.
+5. FRM cropping/height/texturing remain a separate material approximation.
+
+Object rotation and FRM width/anchor no longer select structural orientation.
+Native hex adjacency also no longer creates wall branches. This specifically
+removes the false zigzags and three/four-way junctions seen in the previous
+adjacency build.
+
+Corner arm directions are based on the VAULTBUR wall-map relationships and are
+still considered a runtime-validation target. Texture reconstruction for
+corners remains approximate because one isometric FRM is being projected onto
+two first-person planes.
+
+## Geometry-only debug view
+
+Launch with:
+
+```sh
+FALLOUT_FP_WALL_DEBUG=1 /path/to/fallout-ce
+```
+
+The debug view bypasses FRM pixels and uses the same depth/clipping path with
+solid colors:
+
+- red: north/south
+- green: east/west
+- blue: north corner
+- yellow: south corner
+- magenta: east corner
+- cyan: west corner
+
+This is the preferred validation mode for the next Deck recording. Straight
+runs should no longer zigzag as the camera turns. Corners should stay fixed in
+world space and should not sprout extra branches merely because another wall
+occupies an adjacent hex.
+
+## Automated checks
+
+No proprietary game data or SDL is required for the structural regression test:
+
+```sh
+g++ -std=c++17 -Wall -Wextra -Werror -Isrc \
+  -fsanitize=address,undefined tests/first_person_wall_test.cc \
+  -o /tmp/fallout-wall-test
+/tmp/fallout-wall-test
+```
+
+The test verifies Wall Light Type masking, both straight wall axes, east/west
+hex-parity correction, the four corner direction patterns and continuation
+deltas, seam overlap, and near-plane UV clipping.
+
+## Export actual map topology
+
+Set `FALLOUT_FP_MAP_DUMP` to an output text-file path to export once per
+process, on the first first-person frame after loading a map/save. This remains
+independent of `FALLOUT_FP_WALL_DEBUG`.
+
+```sh
+cd "/home/deck/.local/share/Steam/steamapps/common/Fallout/" && \
+FALLOUT_FP_MAP_DUMP="$HOME/Desktop/fallout-wall-map.txt" \
+  ~/fallout1-ce-first-person/build/fallout-ce
+```
+
+The tab-separated diagnostic contains map name, elevation, player tile and
+rotation, every wall/scenery object on that elevation (including hidden objects
+and invisible blocker art), prototype flags, scenery subtype, art name, frame
+metadata and six native neighboring tiles.
+
+
+## Corner-gap correction
+
+The first prototype-driven build still left a large opening at some inside
+corners. The cause was structural rather than a missing black wall asset.
+
+East/West wall centers require a +/-0.25 world-Y parity correction because the
+hex centers zigzag. North/South wall centers do not. The previous corner helper
+applied the shifted center to both axes and then gave the vertical arm a fixed
+0.5-unit length. That left a quarter-hex hole on one parity/direction and
+overextended the opposite case.
+
+Corners now use two different references:
+
+- horizontal vertex: parity-corrected East/West lattice
+- vertical endpoint: the real North/South boundary at worldY +/- 0.5
+
+Real VAULTBUR examples are covered by regression tests, including 13078->13079,
+13878->13678/13877, and 13890->13690/13891. Odd-column synthetic cases are also
+tested.
+
+The renderer also uses a slightly larger world-space overlap at joins and a
+small endpoint-only opaque-pixel repair for sloped isometric FRM edges. These
+measures are deliberately local: they should hide projection/alpha cracks
+without filling authored windows or turning genuine door openings into walls.
+
+
+## Rectified wall materials
+
+Fallout wall FRMs are isometric cutouts, not rectangular textures. Treating
+their transparent mask literally in first person created large black holes even
+when the reconstructed wall plane itself was correct.
+
+The renderer now builds a temporary rectangular material for every visible wall
+FRM before projection:
+
+- find the opaque span independently on every source scanline
+- stretch that scanline's opaque span across the rectangular material width
+- if a sampled texel inside the span is transparent, replace it with the nearest
+  opaque texel from the same scanline
+- if an entire scanline is empty, borrow the nearest non-empty scanline
+- project the resulting solid material onto the existing structural wall plane
+
+This deliberately separates wall structure from 2D sprite alpha. Genuine
+openings should ultimately come from map semantics such as doors and their
+state, rather than from transparent pixels authored for the original isometric
+compositor.
+
+The rectified material is precomputed once per visible wall object per frame,
+instead of searching for replacement texels for every projected screen pixel.
+
+
+## Blocker-backed structural bridges
+
+Some Fallout maps use `block.frm` wall objects as invisible collision/topology
+cells between visible wall sprites. In VAULTBUR, for example, the visible west
+corner at tile 13090 is followed by a `block.frm` wall at 13290 and then a
+visible north/south wall at 13490. Ignoring the blocker leaves a real
+first-person hole even though the original isometric scene reads as continuous.
+
+The first-person renderer now treats blocker cells as topology hints rather
+than renderable art:
+
+- `block.frm` itself is never textured or exposed as an interactable object
+- from each blocker cell, trace both directions along the vertical (+/-200)
+  and horizontal (+/-1) structural axes
+- a blocker is promoted to synthetic wall geometry only when both directions
+  reach compatible visible wall structure while passing exclusively through
+  other blocker cells
+- the synthetic span inherits its material from a real wall at one end
+- if a helper qualifies on both axes, choose the shorter proven bridge rather
+  than inventing a four-way intersection
+- tracing is capped at six cells so unrelated collision fields cannot connect
+  distant rooms
+
+This is intentionally stricter than the old adjacency approach: raw neighboring
+objects still do not define wall topology. Blockers are used only as evidence
+for a missing span when visible wall structure proves the same axis on both
+sides.
+
+
+## Wall-finish material pass
+
+The wall renderer now treats corner appearance separately from corner
+structure.
+
+Straight wall FRMs are rectified with a center-preserving scanline transform:
+each source row is aligned by its opaque center and only the narrowed isometric
+silhouette is edge-extended. This avoids independently stretching every row,
+which was producing striped/checkered distortion in first person.
+
+Corner geometry still comes from the corner prototype class, but each corner
+arm now looks for the straight wall that continues that arm. When found, the
+arm borrows that straight wall's rectified material and maps the full texture
+across the face. The corner FRM is retained only as a fallback. This keeps
+corners visually continuous with the walls they actually join.
+
+All structural wall planes now use one nominal world height (1.65) instead of
+deriving physical height from FRM pixel dimensions. The source FRM height was
+an isometric-art dimension, not reliable 3D geometry, and caused uneven wall
+tops.
+
+Blocker-backed bridges are also door-aware. If a blocker trace encounters a
+scenery prototype of type `SCENERY_TYPE_DOOR`, the bridge is rejected so a
+semantic doorway cannot be permanently sealed by reconstructed wall geometry.
+Door open/closed presentation remains a scenery/rendering task.
+
+
+
+## Wall milestone status
+
+The wall renderer is now considered structurally complete enough for the next
+first-person milestones.
+
+Validated in VAULTBUR:
+
+- straight wall runs hold their world-space shape while walking and turning
+- prototype-driven corner geometry produces enclosed rooms
+- blocker-backed reconstruction closes large missing spans that the isometric
+  renderer supplied indirectly
+- semantic door tiles are excluded from blocker bridges
+- wall tops use a consistent structural height
+- corner arms can borrow compatible straight-wall materials
+- depth testing and native movement remain stable
+
+Known limitations intentionally deferred:
+
+- one isolated corner pattern can still fail to produce a convincing visible
+  face even though the surrounding geometry is correct
+- original Fallout wall FRMs are isometric sprites, so some first-person
+  textures remain visibly stretched or distorted
+- cosmetic seam/material work should be revisited after doors, scenery and
+  other world objects have a proper first-person representation
+
+A test of Fallout's native translucent "egg" sidedness did not fix the remaining
+corner case, so that experiment was removed rather than carrying extra
+player-relative material logic into later milestones. The original egg remains
+a top-down renderer behavior, not part of the first-person wall model.
+
+
+## Door/scenery milestone
+
+Doors now begin moving out of the generic billboard renderer and into structural
+first-person geometry.
+
+For scenery prototypes of type `SCENERY_TYPE_DOOR`:
+
+- collect their live tile, rotation, frame and prototype `extendedFlags`
+- place closed doors on the same structural lattice used by walls
+- render them as depth-tested vertical planes instead of camera-facing sprites
+- write the real door object into the first-person pick buffer, so existing
+  Fallout mouse/use logic can target the door directly
+- keep door tiles excluded from blocker-backed wall reconstruction
+- skip doors in the later generic scenery billboard pass to avoid double
+  rendering
+- render frame-0 closed doors structurally, but keep non-zero animated/open
+  door frames visible through the live scenery pass instead of making the
+  door vanish entirely; native Fallout collision, scripts and use behavior
+  remain authoritative
+
+This is intentionally a minimal bridge to semantic scenery. The next validation
+target is that a closed door visually occupies its doorway, can still be clicked
+through the normal Fallout action system, and disappears from the structural
+opening when native door animation advances away from frame 0.
+
+## VAULTBUR doorway snapshot and scenery cleanup
+
+The October 5 snapshot (`VAULTBUR.SAV`, elevation 0, player tile 14478)
+contains 611 wall objects and 121 scenery objects: 120 generic scenery and
+one ladder-up. There are **zero** `SCENERY_TYPE_DOOR` objects on this elevation.
+Consequently this room cannot validate the animated-door fallback. Its visible
+openings must be investigated as wall/generic-scenery construction, without
+inventing interactive door objects or sealing gaps from proximity alone.
+
+The generic scenery pass now skips `block.frm`, matching the existing wall
+collector's handling of invisible collision helpers. These helpers no longer
+produce billboard pixels, depth, or pick IDs; native collision remains intact.
+Critter sprites now use a constant scale of 80 source pixels per world unit,
+including live and death frames, instead of normalizing every rat and corpse to
+human height. This is an initial visual scale, pending in-game validation.
+
+An explicit `FALLOUT_FP_MAP_DUMP` also writes `<dump-path>.art.txt`. The companion
+contains unique wall/scenery frames within 18 hexes of the player, their FID,
+direction, frame number, dimensions, indexed pixels, and the 6-bit RGB palette.
+Index zero is transparent. Match these entries to the topology table by FID
+and direction. This allows identification of doorway art before defining frame
+geometry. The export runs once per launch with the existing map dump, not during
+normal gameplay. It contains local game artwork and is not a repository fixture.
+
+No wall lattice, blocker-span reconstruction, door state/use behavior, or native
+movement changes are included in this cleanup.
+
+## Verified doorway overhead spans
+
+The nearby source-art export identifies two paired wall-art constructions:
+
+- `dv1036.frm` at tile 14677 and `dv1035.frm` at 14679 flank empty tile 14678.
+- `dv1043.frm` at tile 15092 and `dv1044.frm` at 15492 flank empty tile 15292.
+
+The new visual profiles require these exact art pairs, matching structural
+orientations, and the corresponding tile spacing. They are asset-based, not
+hard-coded to these example map coordinates. Row wrapping, ordinary wall art,
+and mismatched pairs are rejected. An existing wall, wall blocker, or native
+door on the middle tile also prevents this additional geometry.
+
+For a verified pair, the renderer adds only an overhead span across the empty
+middle segment, from height 1.35 to the existing wall height 1.65. It samples
+the upper 28% of the broad header piece's rectified material. These dimensions
+and texture sampling are initial visual approximations requiring Deck review.
+The existing flank wall geometry and passage width remain untouched. Header
+pixels use normal depth testing and retain a real wall object as pick owner;
+no new engine object, use action, or collision is created. The added spans are
+kept outside the topology/corner-material collection so they cannot change
+established wall reconstruction.
+
+This is an overhead framing pass, not completed 3D doorway modeling. Narrower
+posts, jamb depth, windows, and the separate `bvs40.frm` round vault-door scenery
+remain deferred. Unknown gaps remain open rather than receiving guessed frames.
+
+Regression coverage: `tests/first_person_doorway_test.cc` checks both verified
+pairs and rejects wrong art, orientation, spacing, map bounds, and row wrapping.
+The existing wall-lattice regression suite remains unchanged.
+
+## Fixed generic vault doorway scenery
+
+The room snapshot at player tile 15295 identifies the complete doorway frame as
+`v13secr6.frm`: generic scenery object 532 at tile 16696, with extended flags
+`0x08002000`. It is not a native animated door. Its surrounding east/west wall
+run ends at 16693 and resumes at 16699, leaving five lattice columns for the
+complete frame. The local blocker cells are retained as native collision data.
+
+This specific artwork now renders on a fixed east/west structural plane with
+the existing parity correction, a five-column width, and wall height 1.65.
+Its live frame is copied and vertically sheared by column to straighten the
+verified 151x142 sprite's rising top edge (36 source pixels of rise). The
+112-pixel face height is scaled with live frame dimensions. Unlike solid wall
+material rectification, this transform retains index-zero transparency in the
+passage. Source pixels outside the live FRM stay transparent.
+
+The generic billboard pass skips this asset to prevent duplicate rendering.
+The plane uses the shared clipping/depth path and writes the actual scenery
+object into the pick buffer only at visible pixels. Native scripts, use logic,
+and collision remain authoritative. Its baseline is projected on the ground
+plane, avoiding the billboard pass's screen-edge baseline clamp. Other generic
+scenery continues to use the existing renderer.
+
+This is an asset-specific first structural scenery profile. The world placement
+and material orientation require Deck validation; it is still a flat frame
+without jamb thickness or a modeled back face. Elevator artwork and unrelated
+openings are not classified from this asset.
+
+## Broad straight-face material and opening pass
+
+Single-face north/south and east/west wall textures now undo isometric shear
+by source column: retain each column's horizontal location, start it at its
+first opaque pixel, and use the greatest opaque column span as face height.
+Solid materials repair empty samples only within their own column and repeat
+its bottom edge where necessary. This replaces horizontal scanline shifting,
+which folded posts into stripes and dragged unrelated pixels into openings.
+Corner and unknown-class fallback materials retain their existing transform;
+corner arms still prefer their compatible straight continuation art.
+
+Verified window/doorway profiles (`dv1010` through `dv1013`, `dv1035`, `dv1036`,
+`dv1043`, `dv1044`, `velvdr03`, and `velvdr04`) preserve transparent interior
+pixels and short/header-only columns. Corner arms do not borrow these cutout
+materials, so a nearby window cannot create a new hole in a solid corner.
+The transform was visually checked against the exported original frames.
+
+The elevator wall-frame pair `velvdr04.frm`/`velvdr03.frm` at 14302/14306
+establishes a three-cell overhead span. The profile requires exact artwork,
+matching east/west classes, and same-row four-column separation. Existing
+visible walls, wall blockers, or native doors within the span reject it;
+scenery collision helpers retain their native behavior. The upper trim texture
+is divided continuously across the three overhead cells, not repeated on each.
+
+Wall segment positions, movement, collision, and native use behavior remain
+unchanged. Frames remain flat and do not yet have modeled jamb thickness. The
+newly transparent visual openings do not grant movement through native walls.
+Material orientation/appearance and the elevator trim require Deck review.
+For a comparison launch, `FALLOUT_FP_MATERIAL_LEGACY=1` restores the prior
+material transform; it does not change topology or the new overhead profiles.
+
+Explicit map/art exports now include unique wall/scenery frames for the whole
+current elevation. This supersedes the earlier 18-hex art-export limit and
+avoids repeated exports merely because another structural scenery object is
+farther down the corridor. Exports remain opt-in and run once per process.
+
+`tests/first_person_material_test.cc` verifies shear removal, interior alpha,
+header-only columns, solid face filling, and empty input. The doorway suite now
+includes the elevator pairing and wrong-spacing rejection; existing wall
+geometry regression tests remain unchanged.
+
+## Large arch depth and nearby scenery grounding
+
+The verified `v13secr6.frm` frame now has front/back faces at +/-0.06 world
+units from its existing central wall-lattice plane. Narrow outer returns connect
+the two faces. Inner jamb returns are located from the central transparent run
+at 80% of the rectified frame height and sample an adjacent solid source column.
+Source alpha is preserved up each return. The arch opening remains clear;
+no collision, interaction, central placement, or camera-height changes are made.
+This is a first depth treatment: curved inner arch surfaces and the horizontal
+header underside are still absent, and the jamb sampling needs Deck review.
+
+Generic billboard baselines now project their actual ground anchor even below
+the viewport; only draw bounds clip them. Previously clamping that baseline to
+the viewport bottom raised nearby scenery and corpses as the camera approached.
+This correction applies to the round vault-door scenery and damaged panel while
+they retain their existing billboard orientation. The damaged `v13secr4.frm`
+pixels were absent from earlier radius-limited exports; the full-elevation art
+export added in the preceding build will supply them for structural conversion.
+
+The modified source passes the warning-clean compiler syntax check. Existing
+wall, doorway, and material regression suites pass. New depth and grounding
+behavior requires in-game visual testing against the user's assets.
+
+
+### Damaged wall scenery: first structural pass
+
+The full-elevation `fallout-depth-test.txt.art.txt` export contains 121 unique
+frames, including `v13secr4.frm` (342x223). Unlike the clean arch, this art
+combines a damaged wall, a side face, top caps and floor rubble. It must not
+be rectified by treating its complete opaque silhouette as one wall face.
+
+The first pass crops its front face to source columns 40..341, sampling from
+source row 91 at the left to 28 at the right, for 105 vertical pixels. Index
+zero remains transparent, including the damage. The crop removes the major
+baked side/floor silhouette; small attached debris remains in the face.
+It uses the existing structural scenery depth/pick pass, two thin faces and
+outer returns, and is excluded from camera-facing billboards.
+
+Its provisional horizontal span is eight lattice column intervals, centered
+on the native object. In the exported room this places the ends on columns
+92 and 100 around the object at column 96. This is an asset-specific visual
+profile, not a change to world coordinates or blocker reconstruction. Verify
+both end joins and front/back alignment on Deck before calling it complete.
+The full broken side, top surfaces and separate floor rubble are deferred;
+this pass does not claim to reconstruct the complete original solid.
+Native blockers, scripts, collision and object state remain untouched. Picking
+opaque pixels returns the original scenery object; the hole writes no depth
+or pick entry. No passage or new gameplay is inferred from the visual hole.
+
+Validation: strict C++17 syntax compilation and existing wall lattice,
+doorway and material regressions passed. The cropped source face was inspected
+visually; room placement still requires an in-game test.
+
+
+### Visibility radius and topology support
+
+The first-person collector previously rejected walls, doors and scenery beyond
+18 hexes. That cutoff caused visible pop-in in long rooms. It also removed
+wall/blocker evidence before six-cell bridge reconstruction and corner material
+borrowing, which could make boundary pieces change appearance as the player
+moved. The native character egg is an isometric screen-space masking effect;
+first-person wall materials read raw FRM pixels and do not apply that mask.
+
+The visible radius is now 48 hexes for walls, structural scenery, doors and
+billboards. Wall/blocker collection reaches 54 hexes, retaining six extra rings
+for the existing structural searches. Supporting walls outside 48 are evidence
+only, not drawn. All existing lattice geometry, opening rules, native collision,
+use and object state are unchanged. This is still a finite range; it does not
+claim to solve every isolated corner or reconstruct absent map geometry.
+
+Validation: strict C++17 compilation and standalone lattice/near-plane,
+doorway and material regressions. Deck testing should check distant room walls
+and whether remaining corner faults persist once the supporting walls are in
+range. Longer range may increase frame cost; no on-Deck performance result is
+claimed before that test.
+
+
+### Walls MVP checkpoint and independent camera heading
+
+Deck testing confirmed the longer render range. Walls are an MVP checkpoint
+for the current tested rooms, with isolated corners and asset-specific polish
+still deferred. No claim is made that every map has been validated.
+
+The camera previously read `obj_dude->rotation` every frame. Native hex
+pathfinding rotates the character to face each path segment, making click-to-
+walk steer the camera and making backpedal reverse the next forward input.
+First-person heading is now presentation-owned. Enabling first person seeds
+it from native facing; left/right turns change it in the existing 60-degree
+increments. Character facing can change freely without changing the view.
+Up/down request native one-hex movement along/opposite the camera heading.
+Click-to-walk still uses native destination, pathing, collision and animation.
+Floor picking, scene projection and pick-buffer validity use the same heading;
+a deliberate camera turn invalidates old picks.
+
+This pass removes automatic yaw changes. Position still follows native tile
+centers, so lateral hex stepping/position snapping may remain. Smooth position
+interpolation and continuous mouse look are separate future presentation work.
+
+Validation: strict first-person C++17 syntax compilation and an actual camera
+function harness covering native facing changes, turn wrap, disabled turns and
+mode reentry. Run the harness without SDL/game data using:
+
+```sh
+g++ -std=c++17 -Wall -Wextra -Werror -ffunction-sections -fdata-sections -Isrc tests/first_person_camera_test.cc src/game/first_person.cc -Wl,--gc-sections -o /tmp/fp-camera-test
+/tmp/fp-camera-test
+```
+
+Full `game.cc` compilation locally requires unavailable SDL headers; the Deck
+SDK build and movement/targeting playtest are the integration checks.
+
+
+## Scene-agnostic interaction/combat foundation
+
+First-person object picking now has a small screen-space assist radius after an
+exact visible-pixel miss. Fallout's original FRMs are sparse isometric
+silhouettes, which made small switches, items and distant critters too difficult
+to select when treated as literal one-pixel targets in perspective.
+
+The assist is intentionally generic:
+
+- exact rendered pixels remain authoritative
+- only a small nearby pick-buffer neighborhood is searched after an exact miss
+- generic snapping ignores walls so a nearby wall cannot steal a click from a
+  small scenery/item/critter target
+- explicit wall queries still work
+- the returned object is still the real live Fallout `Object`
+- scenery use continues through native use/script logic
+- combat targeting continues through native critter selection,
+  `combat_attack_this`, weapon/AP/range checks and combat state
+
+This is the foundation for testing doors, containers, ladders, elevators,
+switches and enemies across maps without introducing location-specific
+interaction code. Visual presentation can still be specialized later by
+semantic scenery class, but gameplay authority stays in Fallout's existing
+systems.
+
+
+## Interaction/combat foundation validation
+
+The October 5 Steam Deck test validated the generic first-person interaction path
+across multiple native object types:
+
+- scripted elevator scenery could be examined and opened its native elevator UI
+- critters could be acquired from first person and entered Fallout's normal
+  combat/weapon checks (including the native no-ammo result)
+- terminal scenery returned its native examine text
+- the close-range billboard interaction footprint remained usable
+- object targeting remained stable at longer viewing distances
+
+The 24-step presentation heading (15-degree increments) was also validated in
+the same vault rooms. It substantially reduces the six-direction "bladed" view
+without changing Fallout's six-direction hex movement, collision, pathing, or
+animation authority.
+
+This marks the generic picking/interaction/combat-target selection layer as a
+usable foundation. Remaining combat work is primarily feedback/presentation
+(AP, attack state, selected target, weapon state) rather than replacing native
+combat semantics.
+
+
+## First-person combat presentation
+
+The viewport now mirrors native Fallout combat state instead of replacing it.
+A compact top-left status panel shows the current mouse mode at all times. In
+combat/attack mode it additionally shows current AP, attack AP cost, ammo for
+weapons that use it, and the hovered critter.
+
+For a hovered combat target the panel reports either native hit chance or the
+same pre-attack failure condition used by Fallout's combat code (no ammo, out
+of range, not enough AP, blocked aim, dead target, or crippled-arm weapon
+restrictions). The underlying attack still goes through Fallout's normal combat
+functions; this is presentation only.
+
+
+## Native controller free-look foundation
+
+The first-person camera can now read the native SDL game-controller right-stick
+X axis independently of Fallout's mouse cursor. Camera heading is stored
+continuously rather than only as 15-degree slots, while keyboard/D-pad turn
+inputs still move in the existing 15-degree increments.
+
+At full right-stick deflection the camera turns at roughly 150 degrees/second,
+with an 18% dead zone. The right stick changes presentation only; native
+Fallout movement still resolves the camera heading to the nearest of the six
+hex directions.
+
+This is intentionally the first half of the Steam Deck control redesign. Steam
+Input should expose the right stick as a normal gamepad/joystick axis, while
+the right trackpad remains mouse input for Fallout's cursor and UI. Left-stick
+camera-relative hex movement is the next controller milestone after this
+free-look path is validated.
+
+
+## Vertical controller free look
+
+Native right-stick look now consumes both SDL controller axes. Horizontal motion
+continues to rotate the camera freely; vertical motion adds a clamped pitch
+range of roughly +/-18 degrees at about 90 degrees/second.
+
+The software renderer implements pitch by shifting the shared projection
+horizon. Floor sampling, wall/object projection, target-tile conversion, and
+the pick buffer all use that same pitch-aware horizon so visual aiming and
+native hex targeting stay aligned.
+
+The right stick must be exposed by Steam Input as a normal joystick/gamepad
+stick. It should not also emit mouse movement; the right trackpad remains the
+dedicated Fallout mouse cursor.
+
+
+Vertical look now uses asymmetric pitch limits: about +18 degrees upward and
+-40 degrees downward. Fallout maps do not provide meaningful ceiling geometry,
+so the tighter upward cap avoids exposing mostly empty/black space, while the
+deeper downward range lets the player inspect essentially the full ground plane
+and use the trackpad for precise nearby hex/object targeting.
+
+
+## Full-screen first-person presentation
+
+First-person mode now renders into its own full-screen GNW window rather than
+being confined to Fallout's original map viewport above the 100-pixel interface
+bar. Entering first person hides the native interface bar but leaves the
+underlying Fallout interface systems enabled; inventory, Pip-Boy, dialogue,
+elevator panels, and other native modal windows can still open above the
+first-person view.
+
+The first-person mouse/pick path now uses that full-screen presentation window,
+including the lower portion of the screen that previously belonged to the
+interface bar. Leaving first person restores the interface bar when it was
+visible before entering first-person mode.
+
+
+## Free-look input ownership fix
+
+Right-stick free look is now polled from the gameplay/background update path
+instead of from the renderer itself. This prevents camera input from freezing
+after inspect/combat cursor-mode transitions when no unrelated map redraw is
+pending. A successful controller look update explicitly requests a map refresh.
+
+First-person mode also suppresses Fallout's native edge-scrolling cursor logic.
+The full-screen overlay owns the playfield while active, so pushing the cursor
+toward an edge should no longer turn it into the legacy map-scroll arrows or
+let that hidden isometric interaction layer interfere with free look.
+
+
+## Right-stick camera speed tuning
+
+Native right-stick yaw now turns at roughly 270 degrees/second at full
+deflection (18 of the internal 15-degree heading units per second), up from
+about 150 degrees/second. The dead zone and continuous heading model are
+unchanged; this is a responsiveness pass so free look reads as a camera rather
+than as a slightly faster version of the 15-degree D-pad turn step.
+
+
+## First-person eye-height tuning
+
+The first-person eye height was raised from 0.50 to 0.62 world units. The same
+shared value is used by the floor projection, wall/object placement, visible
+hex projection, and screen-to-world target-tile conversion so raising the
+camera does not desynchronize the cursor from the rendered ground.
+
+This is an initial calibration pass rather than a final physical scale. Vault
+window sightlines are the preferred visual reference for the next adjustment.
+
+
+Eye-height calibration was nudged again from 0.62 to 0.68 world units after
+runtime testing against Vault window sightlines. This keeps the camera clearly
+above the earlier crouched-looking perspective without materially changing the
+established world scale.
+
+
+## First-person redraw path optimization
+
+Controller camera motion now redraws the full-screen first-person presentation
+window directly instead of forcing each right-stick sample through Fallout's
+isometric `tile_refresh_display` path. The map draw callback also stops
+redrawing the hidden isometric display window underneath the first-person
+overlay.
+
+This removes redundant dirty-rect/compositing work from continuous camera
+motion and is intended to address the slideshow-like feel observed while
+turning. Native simulation and map refreshes still remain authoritative for
+world changes and movement.
+
+
+## Camera response and eye-height follow-up
+
+Vertical right-stick look now runs at roughly 180 degrees/second at full deflection, up from 90, so pitch responds more closely to the faster horizontal free-look feel. The pitch limits themselves are unchanged.
+
+First-person eye height was raised again from 0.68 to 0.74 world units, matching the previous +0.06 calibration step. The shared projection/targeting eye-height value remains unified so floor targeting stays aligned with the higher viewpoint.
+
+
+## Native left-stick movement foundation
+
+The SDL left stick now supplies camera-relative movement intent directly to the first-person controller layer. The stick vector is converted into a direction relative to the current continuous camera heading, then quantized only at the final step to Fallout's six native hex directions.
+
+Movement still uses Fallout's native animation/pathing/collision request path (`register_object_move_to_tile`), so the stick does not move the player through arbitrary analog world coordinates. Forward, backward, and lateral/diagonal stick directions therefore become native neighboring-hex requests while preserving engine authority.
+
+A 32% movement dead zone and a short 120 ms repeat gate prevent idle drift and command spam. Steam Input should expose the left stick as a normal joystick/gamepad stick for this path; keyboard/D-pad emulation on the left stick should be disabled to avoid duplicate movement/turn commands.
+
+
+## First-person HUD and duplicate-stick guard
+
+The first-person overlay now carries a minimal persistent native-state HUD: current/max HP at the lower left, and ammo at the lower right with AP added while combat is active. These values are read from Fallout's existing critter, stat, interface, and weapon state rather than introducing replacement gameplay state.
+
+A controller activity guard also prevents legacy left/right arrow events from rotating the camera while the native left stick is actively supplying movement. This handles Steam Input layouts that still leak the older arrow binding alongside the SDL joystick axis, eliminating the small yaw bump seen immediately before lateral hex movement while preserving D-pad camera turns when the left stick is centered.
+
+
+## First-person combat target treatment
+
+Attack/crosshair mode now gives the hovered critter a Fallout-green first-person targeting treatment using the existing depth-tested pick buffer. A checker-pattern overlay recolors only the critter's actually visible pixels, so foreground walls and scenery still occlude the target correctly while enough original sprite art remains visible underneath.
+
+The target brackets also switch to the same green treatment in attack mode, and a compact native-font label appears above the target with its name plus current native hit chance. If Fallout rejects the shot, the label mirrors the native reason instead (for example NO AMMO, OUT OF RANGE, NO AP, DEAD, or BLOCKED). Native combat remains fully authoritative; this is presentation only.
+
+
+## First-person equipped weapon presentation
+
+The first-person overlay now presents the currently active native weapon using that item's original Fallout inventory FRM from the user's local game data. Transparent bounds are cropped, the art is nearest-neighbor scaled without changing its aspect ratio, and it is placed as a lower-right 2D/2.5D viewmodel layer. Switching the active hand or weapon therefore changes the viewmodel automatically without introducing duplicate equipment state.
+
+Attack/crosshair mode gives the same weapon art a slightly larger, raised ready pose; normal movement keeps it lower in frame. This is intentionally a presentation prototype using original local assets, not a final reconstructed weapon model. Native weapon state, ammo, AP, attacks, and animations remain authoritative.
+
+
+## First-person weapon presentation layer
+
+Weapon rendering is now split into two concerns: Fallout remains authoritative for the active item, hit mode, native critter animation, ammo, AP, and combat; the first-person layer translates that state into a presentation pose. The viewmodel currently supports Lowered, Ready, Attack, and Reload poses.
+
+Presentation profiles are keyed from Fallout's native weapon animation category (pistol, SMG, shotgun/rifle, minigun/launcher, and melee families). Each profile can independently tune width, horizontal framing, and vertical placement per pose. The current inventory FRM remains only a temporary visual source, but future first-person art or 2.5D reconstructions can plug into this layer without changing equipment/combat logic.
+
+Attack pose detection follows the player's native critter animation (melee, throw, point/fire/burst/continuous fire). Crosshair mode selects Ready; reload hit modes select Reload; normal exploration selects Lowered.
+
+
+## Cross-map combat targeting and large-room performance
+
+First-person attack mode now treats the center reticle as the authoritative combat pick point. Right-stick camera aim therefore drives the same critter selection used by the green target treatment, hit-chance HUD, hover feedback, and native `combat_attack_this` path. Normal interaction mode still uses the real mouse/trackpad pointer.
+
+Wall materials are now cached across first-person frames instead of being re-extracted and rectified from their source FRMs on every redraw. This removes a large amount of repeated CPU work in bigger maps such as the starting Vault, while leaving established wall geometry, topology reconstruction, and projection math unchanged.
+
+
+## Unified center-reticle world input and render-buffer reuse
+
+All first-person world modes now use the center reticle as the authoritative pointer. Move targeting, inspect/use object selection, combat target selection, hover feedback, and the visible crosshair therefore reference one camera-centered point instead of allowing the hidden/free mouse cursor to drift independently. The separate first-person mouse pointer overlay has been removed; native modal interfaces still retain normal mouse ownership when they appear above the first-person view.
+
+The renderer also reuses its large depth and pick buffers across frames instead of reallocating them for every camera update. Hover-object bounds are recorded during billboard projection and reused for highlighting, replacing the previous full-frame pixel scan used to rediscover a selected object's screen bounds. These changes are aimed specifically at reducing large-map camera hitching without changing world geometry or native movement/combat authority.
+
+
+## Dedicated first-person mode cycle and GPU composition bridge
+
+First person now owns its world-mode cycle instead of delegating to Fallout's stock mouse-mode toggle. The first-person sequence is MOVE -> INTERACT -> ATTACK -> MOVE, so ATTACK remains available even before native combat has begun; native combat itself still starts only when the player actually attacks a target.
+
+A dedicated GPU composition hook now runs after Fallout CE uploads its software framebuffer to SDL and before `SDL_RenderPresent`. The center reticle has been moved into this GPU pass as the first visible migration step, with mode-aware coloring and suppression while a native modal window owns the center of the screen. This does not yet move the world renderer off the CPU, but it establishes the render stage where floor, structural walls, billboards, weapon presentation, and HUD can be migrated incrementally without replacing Fallout's simulation or the existing first-person coordinate model.
+
+
+## Pre-combat attack-mode persistence and duplicate move suppression
+
+Fallout's background mouse process normally forces any cursor mode at or above CROSSHAIR back to MOVE when the physical mouse is not over the native map window and combat has not yet started. First person now bypasses that legacy reset, allowing its explicit MOVE -> INTERACT -> ATTACK cycle to remain stable before combat begins.
+
+The legacy KEY_ARROW_UP and KEY_ARROW_DOWN movement paths are also suppressed while native left-stick movement is active, matching the existing left/right guard. This prevents Steam Input from sending both joystick intent and legacy arrow events that can queue extra forward/backward hex movement after the stick is released.
+
+
+## Native combat initiation, options overlay, and first textured GPU element
+
+First-person attack mode can now initiate native Fallout combat directly from the center-reticle target. Outside combat, a crosshair click builds the same native combat-start structure used by Fallout's combat system and enters combat with the selected live critter as the initial defender; once combat is active, normal `combat_attack_this` handling remains unchanged.
+
+The full-screen first-person overlay can now be temporarily hidden while the native options/start menu is open, then restored afterward. This establishes the pattern for letting native modal UI appear above first person instead of being trapped behind the overlay.
+
+The equipped first-person weapon viewmodel is now the first textured presentation element moved out of the CPU framebuffer. Its original indexed Fallout inventory art is converted through the active game palette into an SDL GPU texture, cached, and scaled/composited by the GPU immediately before present. The world floor/walls/billboards are still software-rendered at this stage, so this is an architectural migration step rather than the large performance win; the next GPU work should target the expensive world passes, beginning with the floor and structural geometry.
+
+
+## Dedicated first-person mode state and floor migration bridge
+
+First-person MOVE / INTERACT / ATTACK state is now stored independently from Fallout's legacy mouse-mode state. This prevents the native pre-combat cursor rules from silently removing ATTACK mode. First-person left-click handling now routes directly through that dedicated state: ATTACK can start native combat on the center-reticle critter target, while INTERACT uses the same live-object use/examine paths as before.
+
+While the world renderer is being migrated to the GPU, the software perspective floor now samples one authoritative projection lookup per 2x2 output block instead of per pixel. This reduces the most expensive current floor loop by roughly four times while preserving the established world-to-isometric mapping and leaving picking/combat coordinates unchanged. This is a temporary performance bridge, not the final GPU floor implementation.
+
+
+## Unify right-click mode cycling and HUD with dedicated state
+
+The dedicated first-person mode was already used by M, the reticle and click
+routing. Right-click still called the legacy cursor cycle, which deliberately
+skips CROSSHAIR outside combat. The mode/combat text also still read legacy
+state, so its label could disagree with the reticle and actual action.
+
+Right-click now invokes the same first-person MOVE -> INTERACT -> ATTACK cycle
+as M. The mode/combat text reads that same state. Native isometric right-click
+behavior is unchanged. This addresses an input/state mismatch, not GPU warm-up
+or a proven first-combat initialization defect. Validate from a fresh load:
+cycle into ATTACK before combat, check HUD/reticle agree, target a live critter,
+and click; then repeat after combat ends. World rendering remains software;
+GPU composition currently covers the reticle and weapon texture.
+
+
+## GPU world rasterization: first complete world backend
+
+The default first-person world path now uses an offscreen OpenGL 3.3 context
+created through SDL. The existing SDL presentation renderer is retained; its
+current context is restored after each world frame. OpenGL functions are loaded
+through SDL, so this adds no separate GL linker or SDK package requirement.
+The offscreen window is hidden. Unsupported initialization or a GL frame error
+selects the established software world path automatically. Setting
+`FALLOUT_FP_SOFTWARE=1` explicitly selects that comparison/fallback path.
+Wall debug mode also uses the software path.
+
+The GPU draws native floor art, reconstructed walls/corners/lintels, structural
+doors/large scenery and live animated scenery/critter/item billboards. The CPU
+still prepares native objects, materials and the same structural segments.
+Indexed FRMs are uploaded as R8 textures with nearest sampling. Palette-index
+zero is discarded; GPU depth and R32UI owner attachments agree at opaque pixels.
+A separate depth-tested assisted-pick attachment retains billboard opaque-bound
+interaction footprints while rejecting occluded targets. Native object IDs and
+live-pointer validation remain authoritative after readback; there is no new
+collision, combat or interaction simulation.
+
+Floor geometry inverts the same existing world-to-isometric basis. Original
+`square_coord` places each FRM, and a reusable per-art mask built with native
+`square_num` ownership removes overlapping rectangular margins. The shader
+handles perspective interpolation and near-plane clipping. The floor retains
+its 36-unit far cutoff; the visible wall collector remains 48 hexes with 54
+hexes of topology evidence. Neither wall lattice nor camera movement changes.
+
+To preserve the existing native window compositor, this first backend reads
+indexed color, depth, exact IDs and assisted IDs back once per frame. It avoids
+the former CPU floor/wall/door/billboard pixel rasterizers, but synchronous
+readback and remaining CPU material/geometry preparation can still limit
+performance. No Deck FPS improvement is claimed before measurement. HUD text,
+target highlights and native modal menus remain lightweight software UI; the
+existing SDL GPU weapon and reticle composition follows the world output.
+
+Validation: compiled all modified C++ translation units with SDL headers; new
+backend and test compile with strict warnings. Executed the backend using SDL's
+offscreen GL driver: indexed color, transparency, scene depth, exact and assisted
+picking, wall occlusion, near clipping, framebuffer resize, context restoration
+and explicit software selection passed. Existing lattice/clipping, doorway and
+material regressions also passed. The full game/Deck integration still requires
+the user's SDK build and visual/input test with Fallout data.
+
+The standalone GPU check can be compiled on Linux with:
+
+```sh
+g++ -std=c++17 -Wall -Wextra -Werror -Isrc $(sdl2-config --cflags) tests/first_person_world_gpu_test.cc src/game/first_person_world_gpu.cc $(sdl2-config --libs) -o /tmp/fp-world-test
+SDL_VIDEODRIVER=offscreen /tmp/fp-world-test
+```
+
+Deck verification should cover the vault and cave floors, both sides of doors,
+transparent windows, moving rats, target selection behind walls, opening native
+menus, and leaving/reentering first person. The terminal logs successful world
+GPU initialization or software fallback, making the selected backend observable.
+
+
+## Fresh-combat preview, close-ground aim and scene scheduling
+
+Fresh characters can have zero current combat AP before their first turn. The
+first-person preview formerly passed that value into native bad-shot checking,
+showing NO AP outside combat even though an attack can initiate a native turn.
+`combat_check_bad_shot` now accepts an optional AP-check flag, enabled by default
+for every existing actual attack. Only first-person previews omit it outside
+combat. Native ammo, range, death, crippled-arm and obstruction rules still
+apply; no AP or native object state is temporarily changed for a preview. The
+HUD uses maximum native AP for the pre-combat preview and current AP in combat.
+
+The native player-turn flag is established before its requested initial attack,
+which avoids silently rejecting that attack when a loaded combat state has the
+flag cleared. The original native attack, turn initialization and AP consumption
+remain authoritative. Whether these fixes explain every symptom in the cave
+still requires testing from the fresh save.
+
+Looking down previously clamped the horizon to the viewport, making nearby
+floor-level targets impossible to center. The horizon can now leave the screen,
+with downward pitch extended to 55 degrees. Background fill bounds and software
+floor loop starts are clamped separately to avoid negative buffer offsets. GPU
+ground-clear scissoring also clamps safely. Both picking and scene projection
+use this same horizon. World coordinates and wall lattice are unchanged.
+
+Repeated native map dirty rectangles now request a world refresh rather than
+immediately doing full GPU rasterization/readback each time. Presentation flushes
+one pending scene; a world click also flushes pending work to avoid stale picks.
+A suspended options overlay keeps pending work without rendering beneath it.
+This specifically reduces redundant work in scenes with multiple independently
+moving critters; no measured Deck frame-rate gain is claimed yet.
+
+Validation: modified translation units compile with SDL headers. Regression
+checks cover near-ground center-ray reach at 1280x800, 800x600 and 640x480,
+bounded background fills, coalescing 100 requests into one scene, modal deferral
+and click-flush behavior. The GPU depth/transparency/picking/context checks pass.
+An isolated compiled copy of the native bad-shot function verifies fresh AP-zero
+previews still enforce ammo/range/death and actual attacks still enforce AP.
+Integration test: load the untouched cave save, select ATTACK before any combat,
+center a nearby rat and click; compare movement responsiveness outside combat
+with the small vault and verify close-ground aim and options-menu return.
+
+## Native gameplay-loop foundation
+
+Deck testing of cf66c0a reports a substantial responsiveness gain in the cave
+and vault, with attack initiation working before the first combat. This pass
+builds on that renderer; wall geometry, projection, depth/pick ownership and
+rat simulation speed are unchanged.
+
+- **F8 action menu:** clickable native modal command list over the first-person
+  scene. Arrows select, Enter executes, Escape/F8 closes. The menu pauses native
+  map background processes and restores their previous enabled state. Commands
+  are queued after closing, so Space/end turn and Enter/end combat reach the
+  native combat input loop. End combat can still be refused by native rules.
+- **Combat:** R reloads the active hand through `intface_use_item`, preserving
+  its native ammunition, AP and sound handling. B switches hands; N cycles the
+  native primary/secondary/aimed/reload choices. ATTACK with reload selected
+  executes reload. The HUD names the selected action and displays turn state.
+  Native aimed attacks retain the body-part selector and its own hit chances.
+- **Interaction:** M/right-click still cycles MOVE/INTERACT/ATTACK. Reticle
+  prompts identify pickup, fixed-container open/loot/close, talk, corpse loot,
+  scenery use, door open/close and native locked state. E examines the target.
+  Existing native actions own approach, AP, locks, scripts and transitions.
+  Portable containers retain native pickup behavior. A reversed art-null check
+  in native fixed-container animation scheduling is corrected (successful art
+  locks now provide the action frame and are released; failures skip it).
+- **Skills/items:** native skill and use-item targeting take precedence over
+  the three first-person modes. Pick targets still come from the GPU/CPU
+  object buffers and pass to the existing skill/item action branches. F8 also
+  exposes use-held-item, inventory, skills, Pip-Boy, character and automap.
+- **Feedback:** native display messages appear for six seconds in the viewport,
+  including lock, range, AP, examination and script messages. This first pass
+  shows the latest message on one line; the original native log is retained.
+- **Modal ownership:** scoped, nested overlay suspension covers inventory,
+  loot, use-inventory-on, dialogue, aimed-shot selection, skills, character,
+  Pip-Boy, automap, options/pause/confirmation, save/load and elevator UI.
+  Loading and map transitions suspend the scene while objects are replaced;
+  final resume clears cached picks, resets controller timing and redraws.
+  Original native screens retain their presentation, then return to first person.
+- **Movement:** analog and arrow movement share the same native one-hex request,
+  passing current AP plus bonus movement in combat. They reject input while
+  native UI owns the view, the interface is disabled, or it is an enemy turn.
+  Native animation/pathing still charges the actual movement cost.
+
+Validation: changed translation units pass syntax compilation with SDL2 headers
+(existing legacy integer/pointer-cast warnings remain in actions.cc). A compiled
+engine fixture exercises the actual renderer input/modal functions: free-roam
+movement, combat AP/bonus allowance, zero-AP rejection, enemy-turn/disabled-UI
+blocking, nested modal return, stale pick clearing, and native skill/item mode
+precedence. Wall, doorway, material, projection/coalescing and offscreen OpenGL
+color/depth/transparency/picking regressions pass. No proprietary game-data
+integration run or complete CMake build is available here; Deck verification is
+still required, especially script-driven dialogue, ladders and map exits.
+
+Test cycle: attack a rat -> N to an aimed mode -> select a body part -> R reload
+-> Space/end turn -> finish combat -> M to INTERACT -> loot the corpse -> use a
+fixed container/door -> try a locked target with Skills/Lockpick -> save/load ->
+use an exit or ladder. Also hold/release the stick around inventory and nested
+Options/Load; the world must not move behind the UI or retain a stale target.
+For Deck, bind F8 to a spare Steam Input button; its menu can then be operated
+with the trackpad/click or arrow/Enter bindings. Existing bindings are unchanged.
+
+## Native Deck/gamepad layout
+
+The game now polls one SDL2 game controller from the central input pump, so
+buttons continue to work in synchronous native inventory/dialogue/menu loops.
+The thumbsticks and buttons share that controller. A controller exposing paddles
+is preferred if both raw and virtual devices are available. Gameplay commands
+are queued into Fallout's normal input loop rather than executing game actions
+from an SDL callback. `FALLOUT_FP_GAMEPAD=0` disables the new button/pointer
+mapping for legacy Steam keyboard/mouse layouts (analog first-person sticks
+remain available).
+
+| Input | First-person world | Action menu / native UI |
+| --- | --- | --- |
+| A | Interact at reticle without changing selected mode | Confirm action menu; mouse click/hold in original screens |
+| B | Options | Back/cancel |
+| X / Y | Inventory / Pip-Boy | Original screens own their input |
+| L1 / R1 | Switch hands / cycle native weapon attack type | No gameplay shortcut behind UI |
+| LT / RT | Cycle mode / execute reticle action once per press | RT click/hold in native pointer UI |
+| Left / right stick | Established native movement / camera | Right stick moves the original UI pointer |
+| D-pad | Unassigned in the world | Arrows with 350 ms initial, 120 ms held repeat |
+| View/Select | Action menu (enable FP first from top-down) | Close/cancel |
+| Menu/Start | Options | Enter confirmation |
+| Right-stick click (R3) | Toggle first person | No toggle behind modal UI |
+| L4 / R4 / L5 / R5, if exposed | Action menu / reload / end turn / toggle view | L4 closes action menu; other shortcuts suppressed |
+
+SDL2's Steam Deck mapping uses Paddle1=R4, Paddle2=L4, Paddle3=R5, Paddle4=L5
+(verified against SDL2's Deck HID driver). A Steam virtual controller may lack
+paddles entirely; the game tests capabilities and shows the appropriate hints.
+View/Select and R3 provide access to the same actions without custom rear-button
+mapping, with reload/end turn available through the action menu. The game does
+not modify the user's Steam configuration, claim a Steam AppID, or ship the
+Steamworks SDK. It cannot force Steam to expose physical grips hidden by its
+virtual-controller layout. Trackpads remain Steam/OS mouse inputs; the native
+right-stick pointer plus A/RT also supports original UI without a mouse trackpad.
+
+One-time setup for this native mode: apply Steam's standard **Gamepad** template
+to the existing Fallout First Person shortcut, replacing the earlier keyboard
+bindings. Keep ordinary gamepad buttons/triggers/sticks/D-pad. Old keyboard
+bindings must be removed to avoid contradictory actions; application code cannot
+identify whether a keyboard event came from Steam Input or a real keyboard.
+Launch the same shortcut after each rebuild. To use trackpad mouse, retain that
+input source only, or use a gamepad template that supplies it.
+
+Input transitions suppress every already-held button/trigger until released.
+Opening inventory while A/RT is held cannot click/drag an item accidentally;
+confirming a menu cannot immediately interact with the world underneath. Focus
+loss releases the emulated mouse, and regain/reconnection requires release
+before any held button becomes active. World triggers have 18000/12000 activation
+and release thresholds; holding RT does not repeatedly attack or move. Native
+UI A/RT stays held for inventory dragging, combined with physical mouse buttons
+through the normal mouse device path. Native gameplay/AP/script rules still own
+the resulting actions.
+
+Validation: binding tests cover the agreed standard/rear-button layout, trigger
+hysteresis, held press suppression, D-pad repeat, modal transitions and reset.
+An actual SDL virtual controller fixture tests central command delivery, menu
+confirmation, merged native click/hold/release, right-stick pointer motion,
+focus loss/regain and disconnect. The existing production gameplay fixture
+passes AP/turn/modal/pick/skill checks. Modified translation units compile with
+SDL2 headers. Deck/Steam Input integration and proprietary-data UI flows still
+require the next device test.
+
+## Steam controller selection regression
+
+The initial native-input pass preferred any controller advertising rear buttons.
+That can select an inactive raw device while Steam supplies usable axes/buttons
+through a second virtual device, losing the previously working camera input.
+Capability is no longer used to decide input ownership. SDL-recognized devices
+remain open, the initial device follows enumeration order, and significant stick
+motion or a genuine button press selects the device producing that event. Small
+axis noise and trigger-release events do not select a different controller.
+The sticks and native buttons continue to share the selected active device.
+Hotplug/focus/menu held-input suppression remains, and an intentional button
+press selecting another device is retained rather than discarded.
+
+A temporary visible PAD diagnostic shows selected device, WORLD/MAP/ACTIONS/UI/
+BLOCKED context, right-stick axis values (1024-unit steps), held-button mask,
+last received native keyboard code, and rear-button availability. It is useful
+for distinguishing controller input from legacy Steam keyboard/mouse bindings.
+The game still cannot recover buttons Steam does not expose or erase a user's
+Steam layout. When GRIPS=no, use View/Select for actions and R3 for view toggle.
+
+Validation: the SDL virtual-controller test now reproduces a dormant controller
+with paddles alongside a working controller without paddles. Input selects the
+working device; right-stick axis values reach the shared controller and X emits
+inventory exactly once. The original button/menu/click/drag/focus/disconnect,
+binding-hysteresis and AP/modal fixtures pass; modified source compiles. Actual
+Deck verification should first move the right stick while filming the PAD line,
+then press View/Select, A, B, X and R3 with the standard Gamepad template active.
+
+
+### Opt-in Steam Deck input recording
+
+Set `FALLOUT_FP_INPUT_LOG` to a writable file path when launching `fallout-ce`.
+For example, from Konsole in the Fallout data directory:
+
+```sh
+FALLOUT_FP_INPUT_LOG=/home/deck/fallout1-ce-first-person/input-debug.log /home/deck/fallout1-ce-first-person/build/fallout-ce
+```
+
+The file records timestamped SDL controller and raw joystick button transitions,
+changed axes, keyboard and mouse button events, decoded keys, selected controller
+and mapping, focus/menu context, and resulting native gamepad commands. Axis
+changes are throttled to about ten samples per second per axis, with deadzone
+crossings recorded immediately. Steam application IDs help compare shortcut and
+Konsole launches. It does not record text-input events or mouse motion.
+
+Each recorded launch replaces the file; lines are flushed as they are written.
+Quit and share the file before launching another recorded test. Without this
+environment variable, recording is disabled. For a useful test, use a safe save,
+move both sticks, press and release buttons individually with a pause, and try
+the action menu and its confirm/back controls. Note the physical button order
+so missing grip events can also be identified.
+
+The SDL virtual-controller integration fixture accepts an optional output path
+and verifies actual event records, context changes, dispatched actions, mouse
+transitions, controller mappings, and session boundaries.
+
+
+### Downward-look framebuffer safety
+
+The sparse depth guides still use Fallout's unclipped software `draw_line`,
+including during GPU rendering. At negative camera pitch, the off-axis horizon
+can put their projected rows above the viewport. These rows are now skipped
+before the native drawing call, preventing writes before the framebuffer.
+Wall/world coordinates and the existing camera projection are unchanged.
+
+The projection regression invokes the production guide helper and the real
+`draw_line` across the full pitch range at 1280x800, 800x600, and 640x480. Guard
+regions remain untouched; restoring the original unclipped drawing fails it.
+Compile with the native drawing implementation (section GC removes unrelated
+legacy graphics routines):
+
+```sh
+g++ -std=c++17 -Wall -Wextra -Werror -Wno-unused-parameter -ffunction-sections -fdata-sections -fsanitize=address,undefined -Isrc tests/first_person_projection_test.cc src/plib/gnw/grbuf.cc -Wl,--gc-sections -o /tmp/fp-projection-test
+ASAN_OPTIONS=detect_leaks=0 /tmp/fp-projection-test
+```
+
+Address/undefined-behavior checks remain enabled; leak detection is disabled
+for the constrained test environment. A device retest must confirm that this
+fix resolves the reported crash; the input log has no crash stack trace.
+
+
+### Native Deck keyboard echo filtering
+
+The Deck test log showed controller presses paired with desktop keyboard
+events: Y/Space, A/Return, B/Escape, View/Tab, d-pad/arrows, shoulders/left
+Ctrl or Alt, and rear grips/Page Up, Shift, Page Down, or GUI. These could
+dispatch two different actions from one physical press.
+
+Native controls now suppress these specific keyboard events when their
+timestamps are within 40 ms of the corresponding controller press from an
+opened SDL controller whose name contains `Steam Deck`. The input loop
+observes an entire event batch before dispatching it, so either arrival order
+works. Suppressed key repeats and the paired release are consumed as well,
+including across menu/context changes. Keyboard events without a matching
+Deck press remain available. Generic controllers and disabled native controls
+do not activate this filter.
+
+SDL2 does not identify the originating keyboard, so an actual keyboard key
+pressed simultaneously with its matching Deck button cannot be distinguished
+from an echo. Set `FALLOUT_FP_KEYBOARD_ECHO=0` to disable correlation if needed.
+This filter applies inside the game; it cannot prevent desktop shortcuts
+handled by the window manager. Custom Steam keyboard layouts may have
+different echo keys and require further evidence from the device log.
+
+Raw events remain in the input recording, with `KEYBOARD_ECHO_SUPPRESSED`
+entries identifying consumed events and a `CONFIG` line showing whether the
+filter is enabled. Recording still uses `FALLOUT_FP_INPUT_LOG`.
+
+Validation includes actual SDL virtual Deck controller events: Y still
+dispatches Pip-boy while its Space echo, repeats, and release are filtered;
+a later independent Space and a generic controller's key remain available.
+Additional tests cover reversed arrival order, opt-out, unrelated keys, grip
+keys, reset, and SDL timestamp wraparound:
+
+```sh
+g++ -std=c++17 -Wall -Wextra -Werror -Isrc $(sdl2-config --cflags) tests/gamepad_keyboard_echo_test.cc -o /tmp/fp-keyboard-echo-test
+/tmp/fp-keyboard-echo-test
+```
+
+
+### Visible UI ownership and returning to first person
+
+The latest device recording showed R5 turning first person off, immediately
+followed by a persistent `UI` context. Further R5 presses arrived without
+producing toggle commands, before the Steam button was pressed. The legacy
+`win_get_top_win` includes hidden windows, so the hidden first-person overlay
+was still reported as the owner above the native map. The same query allowed
+queued GPU weapon sprites to draw after a native modal hid the overlay.
+
+A new `win_get_top_visible_win` excludes hidden windows. First-person input,
+controller context, and mouse ownership now use this query. The existing query
+keeps its native semantics for other callers. GPU weapon/reticle composition
+uses explicit presentation ownership: enabled view, no modal suspension, no
+action menu, and a visible first-person window at the center. This stays
+separate from player-turn/AP input permission so enemy turns still render.
+
+The diagnostic recording adds `top_window`, `fp`, and `overlay` to changed
+state lines. The existing `focus` value means input readiness (window active
+and keyboard enabled); zero alone does not establish a Steam focus problem.
+
+Tests exercise the actual GNW window stack with hidden overlays and native
+modal windows, production nested modal/presentation state, a Map-context R5
+press through SDL virtual controller input, and a queued indexed weapon sprite
+through an actual SDL renderer. The weapon must disappear while UI owns
+presentation and return afterward. Device testing should cover repeated
+R5 off/on, inventory, Options, Actions-to-native-menu transitions, and Steam
+focus return. No world coordinates or native combat rules are changed.
+
+```sh
+g++ -std=c++17 -ffunction-sections -fdata-sections -Isrc $(sdl2-config --cflags) tests/first_person_window_test.cc -Wl,--gc-sections -o /tmp/fp-window-test
+/tmp/fp-window-test
+g++ -std=c++17 -Wall -Wextra -Werror -Isrc $(sdl2-config --cflags) tests/first_person_gpu_ui_test.cc $(sdl2-config --libs) -o /tmp/fp-gpu-ui-test
+SDL_VIDEODRIVER=dummy /tmp/fp-gpu-ui-test
+```
+
+
+### Opt-in art-cache heap checks
+
+Set `FALLOUT_FP_HEAP_CHECK=1` to validate Fallout's art-cache heap at labelled
+checkpoints. A loot crash showed `heap_build_free_list` walking a corrupted
+block. That walk only runs under allocation pressure, so it detects the damage
+late rather than locating its cause.
+
+Checkpoints cover first-person frames (`fp-frame-begin`, `fp-world-gpu` or
+`fp-world-software`, `fp-weapon-before`/`-after`, `fp-frame-gpu` or
+`fp-frame-software`), first-person input (`fp-input-interact`,
+`fp-input-reticle`, `fp-input-move`, `fp-action-menu`), toggling, native modal
+entry/exit and the start of `loot_container` and `handle_inventory`. The first
+failure is written to the `FALLOUT_FP_INPUT_LOG` recording and stderr as
+`HEAP_CHECK_FAILED label=... frame=... reason=...` with the heap counters, then
+the game aborts. The label is the first checkpoint after the damage. The input
+log records `HEAP_CHECK enabled` on the first check.
+
+`heap_validate` now checks a block's size against the heap bounds before using
+it to find the footer, so a corrupted header is reported instead of faulting in
+the validator. Without the variable, no checks run.
+
+The first device run failed at `fp-frame-begin`, with `Bad guard end detected`:
+a block's data was overrun between two first-person frames. Checks now also run
+after each main-loop stage (`loop-get-input`, `loop-handle-input`,
+`loop-scripts`, `loop-map`), after `first_person_update` (`fp-update`) and after
+each native background process (`bk-gmouse`, `bk-object-animate`,
+`bk-dude-fidget`; static processes are labelled by their offset from
+`gmouse_bk_process`, resolved with `nm`). The report adds `owner` and
+`previous_owner`: the cache key, type, id, size, reference count and art file
+of the damaged block and the block before it. A bad footer points at the owner;
+a bad header points at the previous block.
+
+```sh
+g++ -std=c++17 -Wall -Wextra -Werror -Wno-sign-compare -Wno-unused-parameter -ffunction-sections -fdata-sections -Isrc $(sdl2-config --cflags) tests/first_person_heap_check_test.cc -Wl,--gc-sections -o /tmp/fp-heap-check-test
+/tmp/fp-heap-check-test
+```
+
+
+### Cursor pick/menu frames below the native map area
+
+The second heap-check run failed at `bk-gmouse` with the footer of the locked
+`blank.frm` block overwritten; the previous block was `ACTTOHIT.FRM`. Both are
+3D-cursor frames that `gmouse` locks at start-up next to `ACTPICK.FRM`.
+
+`gmouse_3d_build_pick_frame` and `gmouse_3d_build_menu_frame` move the arrow
+down when the cursor nears the bottom of the map: `shift = y + itemHeight + 1 -
+height`, where `height` excludes the 100-pixel interface bar. The native map
+window keeps `y` above that bar. The first-person window covers the whole
+screen, so the hidden mouse can sit in that band while `gmouse_bk_process`
+builds the hover frame. On a 1280x800 screen the shift reached about 140 rows
+of the 69x62 `ACTPICK.FRM`, so the 29x23 arrow was copied up to ~9.7 KB past
+the frame. Its 69-byte row stride skips some block guards and lands on others.
+
+Both builders now limit the shift so the arrow stays inside its frame. Native
+positions that already fit are unchanged; the native edge row, where the shift
+was one row too large, is now in bounds too. The regression test runs the real
+builders with Fallout 1's frame sizes for every row of an 800-pixel screen and
+checks a guard region after each frame; the unmodified builders fail it.
+
+```sh
+g++ -std=c++17 -Wall -Wextra -Werror -Wno-unused-parameter -Wno-sign-compare -Wno-unused-but-set-variable -ffunction-sections -fdata-sections -Isrc $(sdl2-config --cflags) tests/gmouse_cursor_frame_test.cc -Wl,--gc-sections -o /tmp/gmouse-frame-test
+/tmp/gmouse-frame-test
+```
+
+
+## First-person HUD from the original interface bar
+
+The text HP/weapon and AP/ammo panels are replaced by pieces of the original
+640x100 interface bar: the message monitor (0,0 212x97), the HP/AC counters
+with the native ammo bar at x=463 (462,22 58x75) and the AP lights (306,8
+106x14). The bar stays hidden in first person, but native code keeps drawing
+counters, lights, the ammo bar and monitor messages into its buffer, so the
+copies show live native state. No counter, light or message logic is duplicated.
+
+Pieces are copied with whole-number nearest scaling: 2x at 1280x800, so the
+art maps one-to-one onto the Deck screen. The monitor sits bottom-left, the
+counters beside it with their native vertical alignment, and the AP lights
+bottom-centre, moved right if they would overlap the counters.
+`first_person_update` fingerprints the mirrored regions and requests a redraw
+when one changes, so a new message or HP change appears while the camera is
+still. Controller hints moved to the top-right. The controller status line now
+shows only while `FALLOUT_FP_INPUT_LOG` is set.
+
+```sh
+g++ -std=c++17 -Wall -Wextra -Werror -Isrc tests/first_person_hud_test.cc -o /tmp/fp-hud-test
+/tmp/fp-hud-test
+```
+
+### Pip-Boy date strip and stimpak action
+
+The top-left of PIP.FRM (0,0 222x48) now sits at the top-left of the first-person
+view, at the same whole-number scale as the bar pieces. It is filled the way the
+Pip-Boy's `pip_date`/`pip_num` fill it: NUMBERS.FRM digits for day, year and the
+`game_time_hour` clock, and MONTHS.FRM for the month, at the native positions.
+The strip redraws when the native clock changes. The mode panel, notices and
+the input-log status line move below it; controller hints stay top-right.
+
+The action menu has a "Use stimpak" entry (two columns of nine rows). It uses a
+carried stimpak, or a super stimpak if none, through native `item_d_take_drug`,
+removing one from the stack as the combat AI does. In combat it costs the AP the
+inventory charges for opening, 4 less Quick Pockets, and is refused with a
+monitor message when AP is short. Outside combat it costs nothing, as with the
+inventory.
+
+### Critters face the viewer
+
+Critter FRM directions are drawn for the fixed isometric camera, which looks
+toward screen-up (midway between hex directions 0 and 5). Billboards now show
+the direction whose angle to that view equals the angle between the critter's
+real facing and the line from the player to it, so walking around a critter
+turns its sprite and a critter facing the player shows its front. Direction
+angles are measured from the critter's tile neighbours in renderer world
+coordinates, so no handedness is assumed. Native rotation is unchanged; scenery
+and items keep their native direction.
+
+```sh
+g++ -std=c++17 -Wall -Wextra -Werror -Isrc tests/first_person_facing_test.cc -o /tmp/fp-facing-test
+/tmp/fp-facing-test
+```
+
+### Headless all-maps sweep
+
+`FALLOUT_FP_MAP_SWEEP=<tsv>` skips the movies and menus, loads every map in
+`maps\*.map` with the premade combat character and renders first-person frames
+on each elevation that has walls or scenery: the entrance spot plus up to twelve
+unblocked hexes near structure, avoiding exit grids, at four headings each.
+Scripts are disabled after each load and the game loop never runs, so nothing
+advances. Rows: `MAP index name` (flushed before the load, so a crash names
+its map), `FRAME map elevation tile heading ms coverage objects renderer`
+(coverage is the share of pixels owning a pickable object), `ROOF map elevation
+roofSquares walls wallsUnderRoof bestOffsetX bestOffsetY wallsAtBest` (see
+ceilings below) and `DONE map frames`.
+A map with no progress for 60 s is written as `STUCK` and ends the run;
+`FALLOUT_FP_MAP_SWEEP_FROM=<index>` resumes after it. The sweep ignores SIGTERM
+(SDL turns it into a quit event that is never read); stop it with `kill -9`. Combine with
+`FALLOUT_FP_HEAP_CHECK=1` to validate the art cache after every frame. It runs
+without a display:
+
+```sh
+cd "/home/deck/.local/share/Steam/steamapps/common/Fallout/" && \
+SDL_VIDEODRIVER=offscreen SDL_AUDIODRIVER=dummy FALLOUT_FP_HEAP_CHECK=1 \
+FALLOUT_FP_MAP_SWEEP=/tmp/fp-sweep.tsv ~/fallout1-ce-first-person/build/fallout-ce
+```
+
+Frame times under the offscreen driver come from software OpenGL and do not
+predict Deck performance; compare them only between sweeps.
+
+`FALLOUT_FP_SWEEP_MAPS=V13ENT.MAP,VAULT13.MAP` limits the sweep to those maps,
+and `FALLOUT_FP_SWEEP_SHOTS=<dir>` saves each windowed frame as a
+palette-mapped PPM named `<map>_e<elevation>_t<tile>_h<heading>.ppm`, so views
+can be inspected without the device.
+
+### Roof tiles as ceilings
+
+Each map square stores a roof tile in the high 16 bits of the word that holds
+its floor tile. The isometric view draws it 96 pixels higher over the same
+footprint and hides it while the player is underneath. First person draws every
+roof square that is not tile 1 (native "no roof") as a ceiling plane at the
+structural wall-top height (1.65), using the floor's square mapping, masks and
+both renderer paths: GPU quads beside the floor quads, and the software
+sampler, which now fills rows above the horizon from roofs and rows below from
+floors. Squares without roofs keep the sky. The roof's hidden bit is ignored:
+it only marks squares the player stands under. Vault and cave maps have no roof
+tiles and are unchanged.
+
+The sweep's `ROOF` rows check the shared-footprint assumption: for each wall,
+whether a roof square sits at each square offset from the wall's own square.
+Across all maps 28 of 34 roofed elevations peak at (0,0); the rest are small or
+partial roofs with narrow margins (for example 52 against 56), VIPERS
+being the clearest exception. Sweep frame times were unchanged.
+
+### Sliding doors
+
+Native doors open by animating away from frame 0; `obj_is_open` and collision
+follow that. Doors no longer fall back to their isometric animation frames as
+billboards. The structural door pass keeps the closed frame as the panel and
+slides it toward its far jamb by the animation's progress (frame divided by the
+last frame), so a fully open door leaves the doorway clear and closing plays
+the slide in reverse. While a door is moving or open, an invisible interaction
+proxy over its whole doorway keeps it targetable, so it can be closed. Portal
+scenery (v13secr4/6) is unchanged. `tests/first_person_doorway_test.cc` covers
+progress and the slid segment.
+
+### Reticle action prompt
+
+When the reticle is on an object in move or interact mode, the native hover
+cursor's action icon (ACTARROW-menu art: talk, use/get, look, rotate) is drawn
+just right of the reticle at the HUD scale, with the object's name below it.
+The action comes from `gmouse_3d_primary_action`, extracted unchanged from
+`gmouse_bk_process`, so the prompt and the native cursor share one rule.
+The fuller verb text in the mode panel is unchanged.
+
+### Ceilings for roofless elevations
+
+Vault, cave and similar elevations have no roof tiles at all. On those, a
+flood from the map's edge rows across hexes (native `dir_tile` adjacency,
+without `tile_num_in_direction`'s edge stop) marks the outdoors. Barriers are
+what native movement stops at: walls, doors, `block.frm` and blocking scenery
+such as cave rock. Unreached pockets are indoors only if they touch at least
+three wall tiles, so a gap closed off by rocks, wagons or crates stays outdoors.
+Indoor squares, and barrier-only squares beside them (thick walls), get a
+ceiling at the structural height from their own floor tile, darkened through
+`intensityColorTable` at 80/128. The result is cached per map elevation, so a
+frame only draws it. Elevations with any roof tiles are unchanged.
+
+The sweep's `CEILING map elevation enclosedSquares flooredSquares` rows show
+the result: every Vault 13 elevation, VAULTBUR, VAULTNEC, V13ENT, the Mariposa
+vats and storage levels, Glow, the caves and mountain passes are covered; the
+only small pockets elsewhere are COLATRUK (7 squares) and RAIDERS elevation 1
+(20).
+
+```sh
+g++ -std=c++17 -Wall -Wextra -Werror -Isrc tests/first_person_ceiling_test.cc -o /tmp/fp-ceiling-test
+/tmp/fp-ceiling-test
+```
+
+### Native sprite anchors
+
+Critter billboards now use the native anchor. Native drawing puts a frame's
+bottom centre at the hex centre plus the art's per-direction offsets plus the
+object's sub-tile x/y shift. First person converts the x/y shift (which native
+walking builds up before each hex hop) into a world displacement, so walking
+critters move smoothly instead of popping between hexes, and shifts the
+billboard by the shown direction's offsets so the frame's contact point lands
+on the floor. Items rest their lowest visible pixel on the floor instead: their
+offsets are isometric placement and would shift or sink them. Scenery is
+unchanged. The sweep's `SPRITES` rows (count, mean |x|/|y| offsets, worst
+|y|, mean and worst empty rows under the frame) measured critter offsets of
+2-7 px (24 in CAVES) with no empty rows, and items with 13 px offsets and 3.8 px
+of empty rows (worst 47).
+
+### Stage profile
+
+`FALLOUT_FP_PROFILE=<file>` times each first-person frame by stage (setup,
+floor and ceiling, targeting, wall topology, walls, doors, objects, GPU
+readback, overlay). Every 300 frames it writes
+`PROFILE map elevation renderer frames framesPerSecond total=avg/max` followed by
+`stage=avg/max` in milliseconds. Frames are only rendered while something
+changes, so framesPerSecond is the rate while moving or turning. The GPU
+readback stage also absorbs the GPU's own work, since reading back waits for it.
+
+```sh
+g++ -std=c++17 -Wall -Wextra -Werror -Isrc tests/first_person_profile_test.cc -o /tmp/fp-profile-test
+/tmp/fp-profile-test
+```
+
+### Leaving the map with first person on
+
+Quitting to the main menu with first person on crashed in `item_get_type`
+under `first_person_render_now <- first_person_flush_render <- renderPresent
+<- palette_fade_to <- main_menu_show`: closing the options window requested a
+frame, and the menu's palette fade presented it after `map_exit` had freed the
+map's objects. `main_unload_new`, which every route out of the game loop
+calls before unloading, now turns first person off first. The sweep ends the
+same way (frame pending, unload, present) and writes `UNLOADED first_person=0`.
+The freed memory was still readable in the headless run, so that run checks
+the state rather than reproducing the crash.
+
+### Windowed GPU pick readback
+
+The Deck profile showed about 10-11 ms per frame in the GPU readback: full
+colour, depth and two full-screen id buffers (about 13 MB at 1280x800). Colour
+is still read in full, because the HUD draws over it, but ids, proxies and depth
+are now read only where the frame uses them: a 33x33 window at the reticle
+(input always picks there, and hover searches 6 px around it), the target-hex
+outline's bounds (its depth test) and, in attack mode, the hovered critter's
+bounds (the pixels its treatment marks). `first_person_pick` returns an empty
+pick outside the windows read this frame; the software renderer still writes
+every pixel. Because the GPU path overwrites what it reads back, it no longer
+clears the full-screen pick and depth buffers each frame (about 4 ms in setup).
+`first_person_world_gpu_finish`, `_read_region` and `_end` split the readback;
+`first_person_world_gpu_read` remains the full read.
+
+The sweep renders every view twice: windowed, as the game does (its `ms`), then
+with a full readback for coverage, and counts pixels inside the windowed
+frame's windows whose picks differ (`pickWindows pickMismatches`). All frames
+must report 0 mismatches.
+
+### Cached floor geometry and keyed textures
+
+Every GPU quad found its texture by hashing all of its pixels and searching up
+to 2048 textures in order. Textures are now found through a hash table, and a
+caller may pass a stable `textureKey` that stands for the pixels so they are not
+hashed at all. The floor and ceiling pass keeps each map elevation's squares
+(isometric position relative to square 0, which scrolling does not change, plus
+floor and ceiling art) and the masked, optionally darkened faces by art across
+frames, and keys their textures by art. Per frame it only culls and projects.
+On the sweep's first seven maps the average frame went from 27.2 to 15.4 ms;
+setup fell from about 4.3 to 0.1 ms and floor and ceiling from 5-6 to about
+1.4 ms. Those times use software OpenGL, so the readback share on the Deck
+needs its own profile.
+
+### Cached object sprites and closed-form hex distance
+
+The Deck profile's largest remaining stage was objects (about 8 ms in Shady
+Sands). Each frame it measured every object's distance with native
+`tile_dist`, which walks the path a hex at a time with two `tile_coord` calls
+per step, looked up scenery art names, scanned every sprite's pixels for
+its opaque bounds and hashed them to find its texture. Now:
+
+- `first_person_hex_distance` (`first_person_hex.h`) gives the same distance
+  in closed form, as axial coordinates of the even-columns-down grid.
+  `tests/first_person_hex_test.cc` checks it against shortest paths over the
+  native neighbour table to every tile, and the sweep's
+  `HEXDIST map elevation pairs mismatches` rows against `tile_dist` itself.
+- Opaque bounds and GPU textures are keyed by (fid, frame, direction): an FRM
+  frame's pixels never change.
+- Whether scenery art is an invisible helper is cached per art id.
+
+The wall topology and door passes now use the same distance. Only their radius
+checks changed, which the sweep confirms by producing identical frames; on the
+town maps topology fell from about 3.9 to 0.8 ms, and the sweep's average frame
+from 10.3 to 8.0 ms.
+
+```sh
+g++ -O2 -std=c++17 -Wall -Wextra -Werror -Isrc tests/first_person_hex_test.cc -o /tmp/fp-hex-test
+/tmp/fp-hex-test
+```
+
+## Wall leak pass: reachability, solid backs, interior ceilings and seals
+
+Screenshots of V13ENT, VAULT13 and VAULTBUR showed why rock and wall masses
+looked like hollow "boxes" and why some walls had gaps. The isometric maps
+build solid rock as an outline of wall pieces with nothing inside, and the
+original art hides several kinds of opening that first person exposes:
+transparent pixels in wall FRMs, wall pieces that only met through sprite
+overlap, invisible blockers with no drawn face, and floorless void around a
+map's interiors. Native movement, collision and pathing are unchanged by
+everything below; it only changes what first person draws.
+
+### Reachability (`first_person_reach.h`)
+
+Walkable hexes for first person: a flood from the player over native
+adjacency, stopped by what native `obj_blocking_at` blocks (visible, blocking
+walls and scenery, multi-hex scenery over its neighbours; items never block),
+except critters (they move) and doors (they open), and by hexes whose square has
+no floor art (tile 1, which draws nothing: the void). It is cached per map
+elevation and recomputed when the player is outside the cached area. Without
+the player on the elevation (the sweep, before visiting) critters and exit grids
+seed it, leaving out groups that reach the map edge (scripts park critters in
+the void) unless every group does. Each hex also gets its distance from the
+walkable area, capped at 8.
+
+### Leak measurement
+
+The sweep now picks camera spots only on walkable hexes (about half used to be
+in the void around the map) and, for each full-readback frame, samples every
+4th pixel: `leakVoid` is the share whose floor- or wall-height surface lies 3+
+hexes from walkable space (seen through a gap; ceiling over rock is not a
+leak), `leakSky` the share with no surface at all while the camera is under a
+ceiling. `REACH map elevation reachable edgeReachable edgeMargin` rows, and `solidFaces`
+and `sealFaces` per frame, go with them. `FALLOUT_FP_REACH_TRACE=1` traces the
+path from the entrance to the map edge when the walkable area reaches it.
+
+### Solid wall backs
+
+A wall face with one side more than a hex beyond walkable space backs onto
+rock or void. Its material is replaced by a copy whose transparent pixels are
+filled from the nearest opaque pixel in the same column, darkened through
+`intensityColorTable` (`first_person_fill_material_holes`). Faces between two
+walkable spaces (fences, wall art with doorway openings) keep their
+transparency.
+
+Doors are scenery, not walls, so these fixes first ignored them: seal faces
+went up across doorways (hiding Vault 13's doors) and doorway frames whose far
+side is thick wall had their openings filled, reading as walls where none
+were. Faces within 2 hexes of a door, and faces whose art has a doorway (a
+see-through opening at the bottom, a quarter of the width and half the
+height, away from the face's ends: `first_person_material_has_doorway`),
+keep their transparency. Door hexes and panels count as cover for seal faces,
+and no seal face is built within a hex of a door (door protos often carry
+corner orientations, so their panels need not line up with the doorway).
+Leak measures on the test maps are unchanged (Vault 13 e0 sky 2.98 to 3.04%).
+`FALLOUT_FP_SWEEP_OPEN_DOORS=1` shows every door on its open frame in the
+sweep.
+
+Door orientation: many door protos carry a corner orientation (the Vault 13
+doors `v13doorf`/`vdoorf` and the gear door `v13secur` are flagged West
+corner), which bent their panels into a V. A corner-flagged door whose closed
+art's top edge follows one wall slope (`first_person_sprite_top_axis`: within
+2 px over the best nine tenths of its columns; the notched bottoms defeat the
+full band test) is drawn as a straight panel on that axis. The gear door uses
+the same 151x142 arch art as the `v13secr6` doorway and now goes through that
+profile, showing its live frame five columns wide: open, the gear has rolled
+aside and the arch stays, where sliding the closed frame away removed both.
+
+The cave's rolling vault door is two pieces on one hex: the frame
+(`v13secr3`, generic scenery) and the gear on its rail (`v13secr2`, the door).
+The gear's round top defeats the top-edge test, so a door whose top fails is
+judged by its bottom edge (`first_person_sprite_edge_axis`); edges now need
+only their best three quarters of columns on the slope, since the frame's
+left fifth is a side return. Large scenery (150+ px wide) within 2 hexes of a
+door whose top or bottom edge follows a wall slope is a door frame and stands
+flat on that line through its own hex instead of turning; cars, vats and rock
+masses with straight edges are not near doors and stay cards.
+
+### Interior ceilings
+
+On elevations without roof tiles, when the walkable area does not come within
+16 hexes of the map edge (a vault level, a cave), every square within 7 hexes of
+it gets a ceiling, so the ceiling also covers the tops of rock and wall masses.
+The enclosed-pocket ceilings remain for areas that do reach the edge.
+
+Outdoor maps keep a few unwalkable rows at the edge, so their walkable area never
+touches it: requiring the edge itself roofed the desert encounters. On all 72
+stock maps the walkable area of an outdoor elevation comes within 2-12 hexes of
+the edge (0 where it reaches it) and that of an interior stays 28 or more inside
+(the sweep's `REACH` rows now end with that margin).
+
+### Seal faces (`first_person_seal.h`)
+
+Where a walkable hex meets a wall hex (visible wall or invisible blocker) or a
+floorless hex, and no drawn wall face stands behind that hex edge, a solid face
+is drawn along the edge with the nearest wall's material (filled). An edge is
+covered when rays from its middle and near its ends, straight across it, all
+meet a drawn wall segment within 3 units while crossing only wall hexes: that
+accepts real walls set back behind a row of invisible blockers (common in the
+vaults) and rejects openings into the void. Edges with no wall within three
+hexes (the open edge of an outdoor map) get no face. Faces are built once per
+walkable area and drawn without a pick owner, so they hide objects behind them
+without becoming targets.
+
+Leak measurement on the six test maps, the same spots and metric with the
+fixes off (`FALLOUT_FP_WALL_LEAKS_LEGACY=1`) and on:
+
+| Map | leakVoid off | on | leakSky off | on |
+| --- | --- | --- | --- | --- |
+| VAULTBUR e0 | 4.36% | 2.01% | 3.48% | 1.55% |
+| VAULTBUR e1 | 1.36% | 0.55% | 1.97% | 1.44% |
+| CAVES | 1.56% | 0.43% | 5.06% | 2.23% |
+| VAULT13 e0 | 3.58% | 1.89% | 6.29% | 2.98% |
+| V13ENT | 0.56% | 0.21% | 2.42% | 0.74% |
+| HUBDWNTN e0, JUNKENT e0 | unchanged | | unchanged | |
+
+The full 72-map sweep ran clean with the heap check and 0 pick mismatches;
+the walls stage costs about 0.2 ms more per frame.
+
+The worst remaining VAULTBUR view looks through an opening into a separate
+cave chamber that is not reachable from the camera, which the metric counts but
+which is not a hole. The six-map sweeps used:
+
+```sh
+FALLOUT_FP_SWEEP_MAPS=V13ENT.MAP,VAULT13.MAP,CAVES.MAP,VAULTBUR.MAP,HUBDWNTN.MAP,JUNKENT.MAP
+```
+
+```sh
+g++ -std=c++17 -Wall -Wextra -Werror -Isrc tests/first_person_reach_test.cc -o /tmp/fp-reach-test && /tmp/fp-reach-test
+g++ -std=c++17 -Wall -Wextra -Werror -Isrc tests/first_person_seal_test.cc -o /tmp/fp-seal-test && /tmp/fp-seal-test
+```
+
+### Scenery and item surfaces (`first_person_sprite_plane.h`)
+
+Scenery and items no longer stand on camera-facing cards at one depth. They
+keep their original frames, drawn on a world-space surface chosen from native
+data and the art's own outline (no per-asset lists):
+
+- Native flat objects (`OBJECT_FLAT`) whose outline is a flat footprint
+  (`first_person_sprite_flat_footprint`: a box fit with its top within 7 px
+  of the footprint and nothing above 10 px: rugs, mats, holes, the vault
+  floor art) lie on the floor. Flat-flagged heaps (bones, trash, bodies) and
+  machinery (the vats, cars, towers) are placed like other scenery. Each frame corner goes where native
+  drawing puts it (bottom centre at the hex centre plus the art offsets and the
+  object's shift), mapped back through the isometric projection, so they cover
+  the same floor as in the isometric view.
+- Art whose opaque columns form a band along a wall slope (top and bottom
+  edges both follow 0.75 for North/South or -0.25 for East/West, ignoring the
+  worst tenth of columns) goes on the nearest drawn wall segment on that axis
+  within about a hex, 0.04 in front of it on the native camera's side. Columns
+  keep their place along the wall and heights come from the isometric rise at
+  60 px per unit, as for wall art. Windows, vents and wall panels use this.
+- Box-shaped furniture (tables, beds, desks, lockers, shelves, barrels,
+  footlockers) becomes a box. An isometric box's outline shows its two front
+  base edges as a V along the bottom (down the North/South slope to the
+  front corner, then up the East/West slope); the fit takes the V that hugs
+  the outline's bottom closest, reaching it near all three corners (side
+  corners up to 12 px in, since table tops overhang their legs), and the
+  height as the median rise from the footprint's back edges to the outline's
+  top, which must follow them over 60% of columns (50% for pieces 64+ px
+  wide, so beds with headboards and tables with raised parts qualify; small
+  pieces with that much raised are chairs, which smear as boxes). The box stands at the
+  footprint the V shows, in the floor's isometric scale and 60 px per unit
+  of height: two front faces, the top, and two fins along the back edges
+  where art rises above the top (headboards). Each face shows the frame
+  pixels it projects to, so every pixel lands on the face it depicts and the
+  front edges touch the floor. Boxes need 6+ px of depth on both front
+  edges and win over the wall band (bookshelves are both). Chairs with
+  backs, consoles and other uneven tops fail the fit, as do pieces under
+  64 px wide that are less than 85% solid between their outline's top and
+  bottom (open-legged vault chairs smeared as boxes). The GPU samples box
+  faces from a copy of the frame with a transparent border; the whole face
+  is the pick proxy.
+- Everything else turns toward the viewer and leans back by the native camera's
+  angle (25.7°), pivoting about the middle of its visible height, so the front
+  comes forward and the top goes back (each by at most 0.35). Items still rest
+  their lowest visible pixel on the floor. Turned toward the viewer, a card
+  beside a wall swings into it (the round Shady Sands stoves were cut in half
+  by the hut wall), so it is moved straight out from every wall segment
+  within 3 hexes that a corner beside the segment comes within 0.05 of, on
+  the object's side (the native camera's side for objects on the wall line);
+  a wall needing more than 0.8 is across the object and is ignored.
+- Loose items (anything but containers: weapons, ammo, bags) always lean, even
+  when flagged flat (bags, ammo and packs are): laid on the floor a loot pile
+  read as a squashed rug. Container items (desks, lockers, shelves) are
+  furniture and go through the cases above.
+
+Critters are unchanged. The surfaces are real quads: the GPU path submits them
+as screen-pixel numerators and clips them at the near plane; the software
+path intersects each pixel's ray with the parallelogram. Picks, interaction
+proxies (the opaque bounds on the same surface) and hover bounds follow the
+surface. `FALLOUT_FP_SPRITES_LEGACY=1` restores the cards for comparison.
+
+The elevator shaft's back machinery (`velev01.frm`) is a whole shaft corner
+drawn as one diamond-shaped sprite; it fits none of these surfaces and still
+leans.
+
+Sweep additions: `ART map elevation type name count width height flat tile
+distance` rows list the scenery, item and wall art per elevation;
+`FALLOUT_FP_SWEEP_ART=<dir>` saves each listed frame as a PPM (transparent as
+magenta); `FALLOUT_FP_SWEEP_NEAR=<a.frm,b.frm>` replaces the camera spots with
+views of objects using that art, from in front and 60° to either side.
+
+```sh
+g++ -std=c++17 -Wall -Wextra -Werror -Isrc tests/first_person_sprite_plane_test.cc -o /tmp/fp-sprite-plane-test && /tmp/fp-sprite-plane-test
+```
+
+### Held items as solids (`first_person_viewmodel.h`)
+
+The held item is no longer the flat, mirrored inventory frame. Its inventory
+frame becomes a solid: the outline is inflated (half thickness up to 9% of
+the art's breadth, 1.5-5 px, rounding off over 1.5 times that from the
+outline by a chamfer distance), the front and back show the original pixels,
+and the side walls the edge pixels. Faces are shaded through the native
+`intensityColorTable` by a light from the upper left (front faces 0.88-1.23
+of full, walls 0.62-0.97), so the image stays in the game palette.
+
+The item is scaled by its largest extent (pistols 0.30 camera units, rifles
+0.60, hand items 0.15) and turned to point into the view, low and right of centre for guns
+(Doom/Quake-style), raised for melee with the flat side (blade, hammer face)
+to the viewer, pointed into the view for fist weapons (weapons with no
+animation code whose primary attack is unarmed: knuckles, power fist), and held
+close in front of the body for other items. The
+leading end comes from the art: the moment axis of the opaque pixels (left
+level for items and compact shapes such as pistols, whose grip pulls it
+diagonal), then for guns the end away from the broader one (grip or stock),
+for melee the left end (the stock art draws blades and heads there). Three
+stock pieces break those rules and are listed by art name
+(`minigun.frm`, `glock.frm`, `uzi.frm`, `crowbar.frm`). Native stances (lowered, ready
+in attack mode, attack animations, reload) move it as before.
+
+Any item in the active hand is shown, not only weapons (stimpaks, flares,
+grenades). A small software rasterizer draws the solid into an indexed image
+of its screen bounds (2-14 ms, average 5.6 under the offscreen driver) only
+when the item, stance or view size changes; the overlay replaces its one
+viewmodel texture then (`first_person_gpu_replace_indexed_texture`) and
+composites it as before, so modal hiding and both world renderers are
+unchanged. `FALLOUT_FP_VIEWMODEL_LEGACY=1` restores the flat sprite.
+
+`FALLOUT_FP_VIEWMODEL_PREVIEW=<dir>` (with the map sweep) saves every weapon's
+and drug's inventory frame and its rendered stances over the first frame of
+the first map, and prints `VIEWMODELART index name art` lines.
+
+```sh
+g++ -std=c++17 -Wall -Wextra -Werror -Isrc tests/first_person_viewmodel_test.cc -o /tmp/fp-viewmodel-test && /tmp/fp-viewmodel-test
+```
+
+### Speech bubbles
+
+Native floating text (what critters say as the player passes, combat barks,
+script `float_msg`) is drawn by `textobj.cc` into the isometric map at the
+speaker's isometric position, which first person does not show. First person
+now reads the live text objects (`text_object_get`, read-only) and draws each
+one with an owner in a black bubble with a green edge and a tail, centred
+above the speaker's rendered screen bounds and kept on screen below the top
+band, the original text image scaled by the HUD scale. Text whose speaker is
+not rendered gets no bubble. A text appearing or expiring redraws the view.
+`FALLOUT_FP_SWEEP_SAY=<text>` makes every critter within 10 hexes of each
+sweep spot say it.

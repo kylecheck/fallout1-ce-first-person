@@ -1,7 +1,10 @@
 #include "plib/gnw/input.h"
+#include "game/first_person_heap_check.h"
+#include "game/gamepad.h"
 
 #include <limits.h>
 #include <stdio.h>
+#include <vector>
 
 #include "audio_engine.h"
 #include "platform_compat.h"
@@ -141,6 +144,7 @@ int GNW_input_init(int use_msec_timer)
         return -1;
     }
 
+    gamepad_init();
     GNW95_build_key_map();
     GNW95_clear_time_stamps();
 
@@ -165,6 +169,7 @@ int GNW_input_init(int use_msec_timer)
 // 0x4B3390
 void GNW_input_exit()
 {
+    gamepad_shutdown();
     // NOTE: Uninline.
     GNW95_input_exit();
     GNW_mouse_exit();
@@ -229,6 +234,7 @@ void process_bk()
 
     v1 = kb_getch();
     if (v1 != -1) {
+        gamepad_note_key(v1);
         GNW_add_input_buffer(v1);
         return;
     }
@@ -329,6 +335,7 @@ void GNW_do_bk_process()
             mem_free(curr);
         } else {
             curr->f();
+            first_person_heap_check_bk(curr->f);
             currPtr = &(curr->next);
         }
         curr = next;
@@ -1087,7 +1094,14 @@ void GNW95_process_message()
 
     KeyboardData keyboardData;
     SDL_Event e;
+    std::vector<SDL_Event> events;
     while (SDL_PollEvent(&e)) {
+        events.push_back(e);
+        gamepad_handle_event(e);
+    }
+    // Observe the complete batch before dispatch so a keyboard echo arriving
+    // just before its controller event is filtered too. Preserve dispatch order.
+    for (SDL_Event& e : events) {
         switch (e.type) {
         case SDL_MOUSEMOTION:
         case SDL_MOUSEBUTTONDOWN:
@@ -1106,6 +1120,7 @@ void GNW95_process_message()
             break;
         case SDL_KEYDOWN:
         case SDL_KEYUP:
+            if (gamepad_filter_keyboard_echo(e)) break;
             if (!kb_is_disabled()) {
                 keyboardData.key = e.key.keysym.scancode;
                 keyboardData.down = (e.key.state & SDL_PRESSED) != 0;
@@ -1138,6 +1153,7 @@ void GNW95_process_message()
         }
     }
 
+    gamepad_update(GNW95_isActive && !kb_is_disabled());
     touch_process_gesture();
 
     if (GNW95_isActive && !kb_is_disabled()) {
