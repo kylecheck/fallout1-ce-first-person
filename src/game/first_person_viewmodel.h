@@ -21,6 +21,9 @@ enum FirstPersonViewmodelKind {
     FIRST_PERSON_VIEWMODEL_MELEE,
     // Stimpaks, grenades, flares: held upright as drawn.
     FIRST_PERSON_VIEWMODEL_ITEM,
+    // Knuckles and power fists: worn on the fist, the striking end (the
+    // right as drawn) pointing into the view.
+    FIRST_PERSON_VIEWMODEL_FIST,
 };
 
 // A frame's principal axis and leading end, in frame pixels (y down).
@@ -45,6 +48,7 @@ inline int first_person_viewmodel_art_lead(const char* artName)
         // Guns whose muzzle housing is their broad end.
         { "minigun.frm", 1 },
         { "glock.frm", 1 },
+        { "uzi.frm", 1 },
         // Melee art drawn with the working end on the right.
         { "crowbar.frm", 1 },
     };
@@ -167,7 +171,8 @@ inline FirstPersonViewmodelAxis first_person_viewmodel_axis(const unsigned char*
         const double nearBreadth = breadthNear[1] - breadthNear[0];
         const double farBreadth = breadthFar[1] - breadthFar[0];
         // The far end is the right one as drawn (the axis points right).
-        bool leadFar = kind == FIRST_PERSON_VIEWMODEL_GUN ? farBreadth < nearBreadth : false;
+        bool leadFar = kind == FIRST_PERSON_VIEWMODEL_GUN ? farBreadth < nearBreadth
+                                                          : kind == FIRST_PERSON_VIEWMODEL_FIST;
         if (lead != 0) leadFar = lead > 0;
         if (!leadFar) {
             axis.axisX = -axis.axisX;
@@ -244,10 +249,13 @@ enum FirstPersonViewmodelStance {
     FIRST_PERSON_VIEWMODEL_RELOAD,
 };
 
-// Native weapon animation codes (art.h WEAPON_ANIMATION_*), -1 for items.
+// Native weapon animation codes (art.h WEAPON_ANIMATION_*); 0 is a weapon
+// with none whose attack is unarmed, -1 an item or a thrown weapon.
 inline FirstPersonViewmodelKind first_person_viewmodel_kind(int animationCode)
 {
     switch (animationCode) {
+    case 0:
+        return FIRST_PERSON_VIEWMODEL_FIST;
     case 1: // knife
     case 2: // club
     case 3: // hammer
@@ -286,8 +294,11 @@ inline FirstPersonViewmodelPose first_person_viewmodel_pose(int animationCode, F
         if (animationCode == 3 || animationCode == 4) length = 0.60;
         if (animationCode == 2) length = 0.42;
         pose = { 0.24, -0.22, 0.66, -0.25, 0.85, 0.45, -1.0, 0.0, 0.0, length };
+    } else if (kind == FIRST_PERSON_VIEWMODEL_FIST) {
+        pose = { 0.20, -0.24, 0.62, -0.30, 0.10, 1.0, 0.0, 1.0, 0.0, 0.22 };
     } else {
-        pose = { 0.17, -0.17, 0.60, 0.92, 0.18, -0.25, 0.0, 1.0, 0.0, 0.15 };
+        // Close in front of the body, turned a little toward the centre.
+        pose = { 0.13, -0.13, 0.48, 0.85, 0.15, -0.45, 0.0, 1.0, 0.0, 0.15 };
     }
     switch (stance) {
     case FIRST_PERSON_VIEWMODEL_LOWERED:

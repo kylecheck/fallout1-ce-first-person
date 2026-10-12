@@ -82,6 +82,7 @@ int main()
         assert(first_person_viewmodel_kind(5) == FIRST_PERSON_VIEWMODEL_GUN);
         assert(first_person_viewmodel_kind(1) == FIRST_PERSON_VIEWMODEL_MELEE);
         assert(first_person_viewmodel_kind(-1) == FIRST_PERSON_VIEWMODEL_ITEM);
+        assert(first_person_viewmodel_kind(0) == FIRST_PERSON_VIEWMODEL_FIST);
         const FirstPersonViewmodelPose ready = first_person_viewmodel_pose(5, FIRST_PERSON_VIEWMODEL_READY);
         const FirstPersonViewmodelPose lowered = first_person_viewmodel_pose(5, FIRST_PERSON_VIEWMODEL_LOWERED);
         const FirstPersonViewmodelPose attack = first_person_viewmodel_pose(5, FIRST_PERSON_VIEWMODEL_ATTACK);

@@ -164,6 +164,21 @@ static FirstPersonWeaponPose first_person_weapon_pose(int hitMode)
     return FirstPersonWeaponPose::Lowered;
 }
 
+// The held item's class for first_person_viewmodel.h: the native weapon
+// animation code, except that weapons without one are fist weapons when
+// their primary attack is unarmed (0) and thrown items otherwise (-1), as
+// are all non-weapons.
+static int first_person_viewmodel_code(int pid)
+{
+    Proto* proto = nullptr;
+    if (proto_ptr(pid, &proto) != 0 || proto == nullptr || proto->item.type != ITEM_TYPE_WEAPON) return -1;
+    const int code = proto->item.data.weapon.animationCode;
+    if (code != WEAPON_ANIMATION_NONE) return code;
+    Object probe {};
+    probe.pid = pid;
+    return item_w_subtype(&probe, HIT_MODE_RIGHT_WEAPON_PRIMARY) == ATTACK_TYPE_UNARMED ? 0 : -1;
+}
+
 static bool gFirstPersonEnabled = false;
 static FirstPersonFrameRequest gFirstPersonScene;
 static bool gFirstPersonOverlaySuspended = false;
@@ -4085,7 +4100,7 @@ static void first_person_render_now()
         if (!legacyViewmodel
             && intface_get_current_item(&heldItem) == 0
             && heldItem != nullptr) {
-            const int animationCode = item_get_type(heldItem) == ITEM_TYPE_WEAPON ? item_w_anim_code(heldItem) : -1;
+            const int animationCode = first_person_viewmodel_code(heldItem->pid);
             int hitMode = 0;
             bool aiming = false;
             if (intface_get_attack(&hitMode, &aiming) != 0) hitMode = -1;
@@ -4580,7 +4595,8 @@ static void first_person_viewmodel_preview(const char* directory)
             char path[512];
             char artName[64] = { 0 };
             art_get_base_name(FID_TYPE(fid), fid & 0xFFF, artName);
-            std::printf("VIEWMODELART %d %s %s\n", index, name, artName);
+            std::printf("VIEWMODELART %d %s %s anim=%d\n", index, name, artName,
+                proto->item.type == ITEM_TYPE_WEAPON ? proto->item.data.weapon.animationCode : -1);
             std::snprintf(path, sizeof(path), "%s/inv_%03d_%s.ppm", directory, index, name);
             if (std::FILE* image = std::fopen(path, "wb")) {
                 std::fprintf(image, "P6\n%d %d\n255\n", frame->width, frame->height);
@@ -4599,7 +4615,7 @@ static void first_person_viewmodel_preview(const char* directory)
             const unsigned char* scene = win_get_buf(gFirstPersonWindow);
             const int viewWidth = win_width(gFirstPersonWindow);
             const int viewHeight = win_height(gFirstPersonWindow);
-            const int animationCode = proto->item.type == ITEM_TYPE_WEAPON ? proto->item.data.weapon.animationCode : -1;
+            const int animationCode = first_person_viewmodel_code(pid);
             const FirstPersonViewmodelKind kind = first_person_viewmodel_kind(animationCode);
             char leadArt[64] = { 0 };
             art_get_base_name(FID_TYPE(fid), fid & 0xFFF, leadArt);

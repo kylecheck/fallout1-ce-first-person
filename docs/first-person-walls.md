@@ -1690,13 +1690,15 @@ of full, walls 0.62-0.97), so the image stays in the game palette.
 The item is scaled by its largest extent (pistols 0.30 camera units, rifles
 0.60, hand items 0.15) and turned to point into the view, low and right of centre for guns
 (Doom/Quake-style), raised for melee with the flat side (blade, hammer face)
-to the viewer, held up in front for other items. The
+to the viewer, pointed into the view for fist weapons (weapons with no
+animation code whose primary attack is unarmed: knuckles, power fist), and held
+close in front of the body for other items. The
 leading end comes from the art: the moment axis of the opaque pixels (left
 level for items and compact shapes such as pistols, whose grip pulls it
 diagonal), then for guns the end away from the broader one (grip or stock),
 for melee the left end (the stock art draws blades and heads there). Three
 stock pieces break those rules and are listed by art name
-(`minigun.frm`, `glock.frm`, `crowbar.frm`). Native stances (lowered, ready
+(`minigun.frm`, `glock.frm`, `uzi.frm`, `crowbar.frm`). Native stances (lowered, ready
 in attack mode, attack animations, reload) move it as before.
 
 Any item in the active hand is shown, not only weapons (stimpaks, flares,
