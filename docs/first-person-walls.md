@@ -1653,3 +1653,39 @@ views of objects using that art, from in front and 60° to either side.
 ```sh
 g++ -std=c++17 -Wall -Wextra -Werror -Isrc tests/first_person_sprite_plane_test.cc -o /tmp/fp-sprite-plane-test && /tmp/fp-sprite-plane-test
 ```
+
+### Held items as solids (`first_person_viewmodel.h`)
+
+The held item is no longer the flat, mirrored inventory frame. Its inventory
+frame becomes a solid: the outline is inflated (half thickness up to 9% of
+the art's breadth, 1.5-5 px, rounding off over 1.5 times that from the
+outline by a chamfer distance), the front and back show the original pixels,
+and the side walls the edge pixels. Faces are shaded through the native
+`intensityColorTable` by a light from the upper left (front faces 0.88-1.23
+of full, walls 0.62-0.97), so the image stays in the game palette.
+
+The item is turned to point into the view, low and right of centre for guns
+(Doom/Quake-style), angled up for melee, held up in front for other items. The
+leading end comes from the art: the moment axis of the opaque pixels (left
+level for items and compact shapes such as pistols, whose grip pulls it
+diagonal), then for guns the end away from the broader one (grip or stock),
+for melee the left end (the stock art draws blades and heads there). Three
+stock pieces break those rules and are listed by art name
+(`minigun.frm`, `glock.frm`, `crowbar.frm`). Native stances (lowered, ready
+in attack mode, attack animations, reload) move it as before.
+
+Any item in the active hand is shown, not only weapons (stimpaks, flares,
+grenades). A small software rasterizer draws the solid into an indexed image
+of its screen bounds (2-14 ms, average 5.6 under the offscreen driver) only
+when the item, stance or view size changes; the overlay replaces its one
+viewmodel texture then (`first_person_gpu_replace_indexed_texture`) and
+composites it as before, so modal hiding and both world renderers are
+unchanged. `FALLOUT_FP_VIEWMODEL_LEGACY=1` restores the flat sprite.
+
+`FALLOUT_FP_VIEWMODEL_PREVIEW=<dir>` (with the map sweep) saves every weapon's
+and drug's inventory frame and its rendered stances over the first frame of
+the first map, and prints `VIEWMODELART index name art` lines.
+
+```sh
+g++ -std=c++17 -Wall -Wextra -Werror -Isrc tests/first_person_viewmodel_test.cc -o /tmp/fp-viewmodel-test && /tmp/fp-viewmodel-test
+```

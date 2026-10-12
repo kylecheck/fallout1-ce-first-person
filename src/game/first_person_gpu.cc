@@ -108,6 +108,18 @@ static SDL_Texture* first_person_gpu_texture(
     return texture;
 }
 
+void first_person_gpu_replace_indexed_texture(long long key, const unsigned char* pixels, int width, int height)
+{
+    for (auto it = gFirstPersonGpuTextures.begin(); it != gFirstPersonGpuTextures.end(); ++it) {
+        if (it->key == key) {
+            SDL_DestroyTexture(it->texture);
+            gFirstPersonGpuTextures.erase(it);
+            break;
+        }
+    }
+    first_person_gpu_texture(key, pixels, width, height);
+}
+
 void first_person_gpu_begin_frame()
 {
     gFirstPersonGpuSprites.clear();

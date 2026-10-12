@@ -16,8 +16,10 @@
 #include "game/first_person_reach.h"
 #include "game/first_person_seal.h"
 #include "game/first_person_sprite_plane.h"
+#include "game/first_person_viewmodel.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -3803,7 +3805,9 @@ static void first_person_render_now()
     // native state should be framed in first person.
     {
         Object* heldItem = nullptr;
-        if (intface_get_current_item(&heldItem) == 0
+        static const bool legacyViewmodel = std::getenv("FALLOUT_FP_VIEWMODEL_LEGACY") != nullptr;
+        if (legacyViewmodel
+            && intface_get_current_item(&heldItem) == 0
             && heldItem != nullptr
             && item_get_type(heldItem) == ITEM_TYPE_WEAPON) {
             int hitMode = 0;
@@ -3915,6 +3919,83 @@ static void first_person_render_now()
 
                     art_ptr_unlock(weaponArtKey);
                 }
+            }
+            first_person_heap_check("fp-weapon-after");
+        }
+        // The held item as a solid built from its inventory frame (see
+        // first_person_viewmodel.h): weapons and anything else in the hand
+        // (stimpaks, flares, grenades). Rendered again only when the item,
+        // stance or view size changes.
+        if (!legacyViewmodel
+            && intface_get_current_item(&heldItem) == 0
+            && heldItem != nullptr) {
+            const int animationCode = item_get_type(heldItem) == ITEM_TYPE_WEAPON ? item_w_anim_code(heldItem) : -1;
+            int hitMode = 0;
+            bool aiming = false;
+            if (intface_get_attack(&hitMode, &aiming) != 0) hitMode = -1;
+            FirstPersonViewmodelStance stance = FIRST_PERSON_VIEWMODEL_LOWERED;
+            switch (first_person_weapon_pose(hitMode)) {
+            case FirstPersonWeaponPose::Ready:
+                stance = FIRST_PERSON_VIEWMODEL_READY;
+                break;
+            case FirstPersonWeaponPose::Attack:
+                stance = FIRST_PERSON_VIEWMODEL_ATTACK;
+                break;
+            case FirstPersonWeaponPose::Reload:
+                stance = FIRST_PERSON_VIEWMODEL_RELOAD;
+                break;
+            default:
+                break;
+            }
+            const int inventoryFid = item_inv_fid(heldItem);
+            struct Viewmodel {
+                int fid = -1;
+                int animationCode = -2;
+                int stance = -1;
+                int width = 0;
+                int height = 0;
+                FirstPersonViewmodelImage image;
+            };
+            static Viewmodel cached;
+            constexpr long long kViewmodelKey = (1LL << 49) | 1;
+            first_person_heap_check("fp-weapon-before");
+            if (inventoryFid >= 0
+                && (cached.fid != inventoryFid || cached.animationCode != animationCode || cached.stance != stance
+                    || cached.width != width || cached.height != height)
+                && art_exists(inventoryFid)) {
+                CacheEntry* itemArtKey = nullptr;
+                if (Art* itemArt = art_ptr_lock(inventoryFid, &itemArtKey)) {
+                    ArtFrame* itemFrame = frame_ptr(itemArt, 0, 0);
+                    unsigned char* itemPixels = art_frame_data(itemArt, 0, 0);
+                    if (itemFrame != nullptr && itemPixels != nullptr && itemFrame->width > 0 && itemFrame->height > 0) {
+                        char artName[64] = { 0 };
+                        art_get_base_name(FID_TYPE(inventoryFid), inventoryFid & 0xFFF, artName);
+                        const FirstPersonViewmodelKind kind = first_person_viewmodel_kind(animationCode);
+                        const FirstPersonViewmodelAxis axis = first_person_viewmodel_axis(itemPixels, itemFrame->width,
+                            itemFrame->height, kind, first_person_viewmodel_art_lead(artName));
+                        const double maxHalf = std::clamp(axis.breadth * 0.09, 1.5, 5.0);
+                        const std::vector<float> half = first_person_viewmodel_thickness(itemPixels, itemFrame->width,
+                            itemFrame->height, maxHalf, maxHalf * 1.5);
+                        cached.image = first_person_viewmodel_render(itemPixels, itemFrame->width, itemFrame->height,
+                            axis, half, first_person_viewmodel_pose(animationCode, stance), width, height, width * 0.70,
+                            [](unsigned char color, int intensity) { return intensityColorTable[color][intensity]; });
+                        cached.fid = inventoryFid;
+                        cached.animationCode = animationCode;
+                        cached.stance = stance;
+                        cached.width = width;
+                        cached.height = height;
+                        if (cached.image.width > 0 && cached.image.height > 0) {
+                            first_person_gpu_replace_indexed_texture(kViewmodelKey, cached.image.pixels.data(),
+                                cached.image.width, cached.image.height);
+                        }
+                    }
+                    art_ptr_unlock(itemArtKey);
+                }
+            }
+            if (cached.fid == inventoryFid && cached.image.width > 0 && cached.image.height > 0) {
+                first_person_gpu_submit_indexed_sprite(kViewmodelKey, cached.image.pixels.data(),
+                    cached.image.width, cached.image.height, 0, 0, cached.image.width, cached.image.height,
+                    cached.image.left, cached.image.top, cached.image.width, cached.image.height);
             }
             first_person_heap_check("fp-weapon-after");
         }
@@ -4315,6 +4396,103 @@ static bool first_person_sweep_lists_art(const char* list, const char* name)
     return false;
 }
 
+// Opt-in viewmodel preview (FALLOUT_FP_VIEWMODEL_PREVIEW=<dir>, with the map
+// sweep): saves each weapon's and drug's inventory frame as a PPM, magenta
+// where transparent, and its rendered viewmodel in each stance over the
+// first frame of the first map, named by pid and proto name.
+static void first_person_viewmodel_preview(const char* directory)
+{
+    const int count = proto_max_id(OBJ_TYPE_ITEM);
+    for (int index = 1; index < count; index++) {
+        const int pid = (OBJ_TYPE_ITEM << 24) | index;
+        Proto* proto = nullptr;
+        if (proto_ptr(pid, &proto) != 0 || proto == nullptr) continue;
+        if (proto->item.type != ITEM_TYPE_WEAPON && proto->item.type != ITEM_TYPE_DRUG) continue;
+        const int fid = proto->item.inventoryFid;
+        if (fid < 0 || !art_exists(fid)) continue;
+        CacheEntry* entry = nullptr;
+        Art* art = art_ptr_lock(fid, &entry);
+        if (art == nullptr) continue;
+        ArtFrame* frame = frame_ptr(art, 0, 0);
+        const unsigned char* data = art_frame_data(art, 0, 0);
+        if (frame != nullptr && data != nullptr) {
+            char name[64];
+            std::snprintf(name, sizeof(name), "%s", proto_name(pid));
+            for (char* c = name; *c != '\0'; c++) {
+                if (!std::isalnum(static_cast<unsigned char>(*c))) *c = '_';
+            }
+            char path[512];
+            char artName[64] = { 0 };
+            art_get_base_name(FID_TYPE(fid), fid & 0xFFF, artName);
+            std::printf("VIEWMODELART %d %s %s\n", index, name, artName);
+            std::snprintf(path, sizeof(path), "%s/inv_%03d_%s.ppm", directory, index, name);
+            if (std::FILE* image = std::fopen(path, "wb")) {
+                std::fprintf(image, "P6\n%d %d\n255\n", frame->width, frame->height);
+                for (int i = 0; i < frame->width * frame->height; i++) {
+                    const unsigned char rgb[3] = {
+                        static_cast<unsigned char>(data[i] == 0 ? 255 : cmap[data[i] * 3] * 4),
+                        static_cast<unsigned char>(data[i] == 0 ? 0 : cmap[data[i] * 3 + 1] * 4),
+                        static_cast<unsigned char>(data[i] == 0 ? 255 : cmap[data[i] * 3 + 2] * 4) };
+                    std::fwrite(rgb, 1, 3, image);
+                }
+                std::fclose(image);
+            }
+        }
+        // Rendered stances over the current first-person frame.
+        if (frame != nullptr && data != nullptr && gFirstPersonWindow != -1) {
+            const unsigned char* scene = win_get_buf(gFirstPersonWindow);
+            const int viewWidth = win_width(gFirstPersonWindow);
+            const int viewHeight = win_height(gFirstPersonWindow);
+            const int animationCode = proto->item.type == ITEM_TYPE_WEAPON ? proto->item.data.weapon.animationCode : -1;
+            const FirstPersonViewmodelKind kind = first_person_viewmodel_kind(animationCode);
+            char leadArt[64] = { 0 };
+            art_get_base_name(FID_TYPE(fid), fid & 0xFFF, leadArt);
+            const FirstPersonViewmodelAxis axis = first_person_viewmodel_axis(data, frame->width, frame->height, kind,
+                first_person_viewmodel_art_lead(leadArt));
+            const double maxHalf = std::clamp(axis.breadth * 0.09, 1.5, 5.0);
+            const std::vector<float> half = first_person_viewmodel_thickness(data, frame->width, frame->height,
+                maxHalf, maxHalf * 1.5);
+            for (int stance = FIRST_PERSON_VIEWMODEL_LOWERED; stance <= FIRST_PERSON_VIEWMODEL_RELOAD; stance++) {
+                const FirstPersonViewmodelPose pose = first_person_viewmodel_pose(animationCode,
+                    static_cast<FirstPersonViewmodelStance>(stance));
+                const Uint64 start = SDL_GetPerformanceCounter();
+                const FirstPersonViewmodelImage image = first_person_viewmodel_render(data, frame->width, frame->height,
+                    axis, half, pose, viewWidth, viewHeight, viewWidth * 0.70,
+                    [](unsigned char color, int intensity) { return intensityColorTable[color][intensity]; });
+                const double ms = (SDL_GetPerformanceCounter() - start) * 1000.0
+                    / static_cast<double>(SDL_GetPerformanceFrequency());
+                std::printf("VIEWMODEL %d %s stance=%d %dx%d %.2f ms\n", index, proto_name(pid), stance,
+                    image.width, image.height, ms);
+                std::vector<unsigned char> composite(scene, scene + static_cast<size_t>(viewWidth) * viewHeight);
+                for (int y = 0; y < image.height; y++) {
+                    for (int x = 0; x < image.width; x++) {
+                        const unsigned char pixel = image.pixels[static_cast<size_t>(y) * image.width + x];
+                        if (pixel != 0) composite[static_cast<size_t>(y + image.top) * viewWidth + x + image.left] = pixel;
+                    }
+                }
+                char name[64];
+                std::snprintf(name, sizeof(name), "%s", proto_name(pid));
+                for (char* c = name; *c != '\0'; c++) {
+                    if (!std::isalnum(static_cast<unsigned char>(*c))) *c = '_';
+                }
+                char path[512];
+                std::snprintf(path, sizeof(path), "%s/vm_%03d_%s_%d.ppm", directory, index, name, stance);
+                if (std::FILE* out = std::fopen(path, "wb")) {
+                    std::fprintf(out, "P6\n%d %d\n255\n", viewWidth, viewHeight);
+                    for (unsigned char pixel : composite) {
+                        const unsigned char rgb[3] = { static_cast<unsigned char>(cmap[pixel * 3] * 4),
+                            static_cast<unsigned char>(cmap[pixel * 3 + 1] * 4),
+                            static_cast<unsigned char>(cmap[pixel * 3 + 2] * 4) };
+                        std::fwrite(rgb, 1, 3, out);
+                    }
+                    std::fclose(out);
+                }
+            }
+        }
+        art_ptr_unlock(entry);
+    }
+}
+
 // Diagnostic map sweep (FALLOUT_FP_MAP_SWEEP, see main.cc). Renders the loaded
 // map from spread-out standing spots on every used elevation, four headings
 // each, and writes one TSV row per frame. Native state is only read, apart
@@ -4324,6 +4502,14 @@ int first_person_sweep_map(std::FILE* out, const char* mapName, void (*progress)
     constexpr int kTileCount = 200 * 200;
     constexpr int kSpotsPerElevation = 12;
     if (!gFirstPersonEnabled) first_person_toggle();
+    static const char* viewmodelPreview = std::getenv("FALLOUT_FP_VIEWMODEL_PREVIEW");
+    static bool viewmodelPreviewDone = false;
+    if (viewmodelPreview != nullptr && !viewmodelPreviewDone) {
+        viewmodelPreviewDone = true;
+        gFirstPersonCameraRevision++;
+        first_person_render_now();
+        first_person_viewmodel_preview(viewmodelPreview);
+    }
     const int startElevation = map_elevation;
     const int startTile = obj_dude->tile;
     int frames = 0;

@@ -21,6 +21,9 @@ void first_person_gpu_submit_indexed_sprite(
     int destinationWidth,
     int destinationHeight,
     bool flipHorizontal = false);
+// Replaces the texture stored under key with new pixels (for an image that
+// is redrawn, such as the 3D viewmodel); submit it afterwards as usual.
+void first_person_gpu_replace_indexed_texture(long long key, const unsigned char* pixels, int width, int height);
 void first_person_gpu_present();
 
 } // namespace fallout
