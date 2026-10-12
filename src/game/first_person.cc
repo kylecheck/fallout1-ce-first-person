@@ -8,6 +8,7 @@
 #include "game/first_person_frame.h"
 #include "game/first_person_wall.h"
 #include "game/first_person_doorway.h"
+#include "game/first_person_facing.h"
 #include "game/first_person_material.h"
 
 #include <algorithm>
@@ -2402,7 +2403,26 @@ static void first_person_render_now()
             continue;
         }
 
-        const int direction = ((object->rotation % ROTATION_COUNT) + ROTATION_COUNT) % ROTATION_COUNT;
+        int direction = ((object->rotation % ROTATION_COUNT) + ROTATION_COUNT) % ROTATION_COUNT;
+        if (type == OBJ_TYPE_CRITTER) {
+            // Show the side of the critter that faces the viewer: its FRM
+            // directions are drawn for the fixed isometric camera.
+            double directionAngles[ROTATION_COUNT];
+            bool haveAngles = true;
+            for (int r = 0; r < ROTATION_COUNT && haveAngles; r++) {
+                const int neighbor = tile_num_in_direction(object->tile, r, 1);
+                double neighborX;
+                double neighborY;
+                haveAngles = neighbor >= 0 && neighbor != object->tile;
+                if (haveAngles) {
+                    tileToWorld(neighbor, &neighborX, &neighborY);
+                    directionAngles[r] = std::atan2(neighborY - objectWorldY, neighborX - objectWorldX);
+                }
+            }
+            if (haveAngles && (dx != 0.0 || dy != 0.0)) {
+                direction = first_person_billboard_direction(directionAngles, std::atan2(dy, dx), direction);
+            }
+        }
         objectSprites.push_back({ object, object->fid, object->frame, direction, type, cameraX, cameraZ });
     }
 

@@ -1271,3 +1271,19 @@ inventory charges for opening, 4 less Quick Pockets, and is refused with a
 monitor message when AP is short. Outside combat it costs nothing, as with the
 inventory.
 
+### Critters face the viewer
+
+Critter FRM directions are drawn for the fixed isometric camera, which looks
+toward screen-up (midway between hex directions 0 and 5). Billboards now show
+the direction whose angle to that view equals the angle between the critter's
+real facing and the line from the player to it, so walking around a critter
+turns its sprite and a critter facing the player shows its front. Direction
+angles are measured from the critter's tile neighbours in renderer world
+coordinates, so no handedness is assumed. Native rotation is unchanged; scenery
+and items keep their native direction.
+
+```sh
+g++ -std=c++17 -Wall -Wextra -Werror -Isrc tests/first_person_facing_test.cc -o /tmp/fp-facing-test
+/tmp/fp-facing-test
+```
+
