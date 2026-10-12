@@ -1287,3 +1287,26 @@ g++ -std=c++17 -Wall -Wextra -Werror -Isrc tests/first_person_facing_test.cc -o 
 /tmp/fp-facing-test
 ```
 
+### Headless all-maps sweep
+
+`FALLOUT_FP_MAP_SWEEP=<tsv>` skips the movies and menus, loads every map in
+`maps\*.map` with the premade combat character and renders first-person frames
+on each elevation that has walls or scenery: the entrance spot plus up to twelve
+unblocked hexes near structure, avoiding exit grids, at four headings each.
+Scripts are disabled after each load and the game loop never runs, so nothing
+advances. Rows: `MAP index name` (flushed before the load, so a crash names
+its map), `FRAME map elevation tile heading ms coverage objects renderer`
+(coverage is the share of pixels owning a pickable object) and `DONE map frames`.
+A map with no progress for 60 s is written as `STUCK` and ends the run;
+`FALLOUT_FP_MAP_SWEEP_FROM=<index>` resumes after it. Combine with
+`FALLOUT_FP_HEAP_CHECK=1` to validate the art cache after every frame. It runs
+without a display:
+
+```sh
+cd "/home/deck/.local/share/Steam/steamapps/common/Fallout/" && \
+SDL_VIDEODRIVER=offscreen SDL_AUDIODRIVER=dummy FALLOUT_FP_HEAP_CHECK=1 \
+FALLOUT_FP_MAP_SWEEP=/tmp/fp-sweep.tsv ~/fallout1-ce-first-person/build/fallout-ce
+```
+
+Frame times under the offscreen driver come from software OpenGL and do not
+predict Deck performance; compare them only between sweeps.

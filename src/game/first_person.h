@@ -1,6 +1,8 @@
 #ifndef FALLOUT_GAME_FIRST_PERSON_H_
 #define FALLOUT_GAME_FIRST_PERSON_H_
 
+#include <cstdio>
+
 namespace fallout {
 
 struct Object;
@@ -45,6 +47,9 @@ int first_person_rotation();
 void first_person_turn(int steps);
 int first_person_target_tile(int screenX, int screenY);
 Object* first_person_object_at(int screenX, int screenY, int objectType, bool includeDude, int elevation);
+// Diagnostic map sweep: renders the loaded map from sample spots and writes
+// one TSV row per frame. Returns the number of frames.
+int first_person_sweep_map(std::FILE* out, const char* mapName, void (*progress)());
 
 } // namespace fallout
 

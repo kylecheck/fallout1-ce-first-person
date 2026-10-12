@@ -3282,3 +3282,94 @@ static void first_person_render_now()
 }
 
 } // namespace fallout
+
+namespace fallout {
+
+// Diagnostic map sweep (FALLOUT_FP_MAP_SWEEP, see main.cc). Renders the loaded
+// map from spread-out standing spots on every used elevation, four headings
+// each, and writes one TSV row per frame. Native state is only read, apart
+// from moving the player between spots; scripts are not run.
+int first_person_sweep_map(std::FILE* out, const char* mapName, void (*progress)())
+{
+    constexpr int kTileCount = 200 * 200;
+    constexpr int kSpotsPerElevation = 12;
+    if (!gFirstPersonEnabled) first_person_toggle();
+    const int startElevation = map_elevation;
+    const int startTile = obj_dude->tile;
+    int frames = 0;
+    for (int elevation = 0; elevation < ELEVATION_COUNT; elevation++) {
+        std::vector<int> structure;
+        std::vector<unsigned char> avoid(kTileCount, 0);
+        for (Object* object = obj_find_first_at(elevation); object != nullptr; object = obj_find_next_at()) {
+            if (object->tile < 0 || object->tile >= kTileCount || object == obj_dude) continue;
+            const int type = FID_TYPE(object->fid);
+            if (type == OBJ_TYPE_WALL || type == OBJ_TYPE_SCENERY) structure.push_back(object->tile);
+            // Exit grids would queue a map transition when stepped on.
+            if (type == OBJ_TYPE_MISC) avoid[object->tile] = 1;
+        }
+        if (structure.empty()) continue;
+
+        // Unblocked hexes on a coarse grid, near walls or scenery (within
+        // about six hexes, marked once rather than measured pairwise).
+        std::vector<unsigned char> nearStructure(kTileCount, 0);
+        for (int wall : structure) {
+            const int wallRow = wall / 200;
+            const int wallColumn = wall % 200;
+            for (int row = std::max(0, wallRow - 6); row <= std::min(199, wallRow + 6); row++) {
+                for (int column = std::max(0, wallColumn - 6); column <= std::min(199, wallColumn + 6); column++) {
+                    nearStructure[row * 200 + column] = 1;
+                }
+            }
+        }
+        std::vector<int> candidates;
+        for (int row = 3; row < 200; row += 7) {
+            for (int column = 3; column < 200; column += 7) {
+                const int tile = row * 200 + column;
+                if (!nearStructure[tile] || avoid[tile]
+                    || obj_blocking_at(nullptr, tile, elevation) != nullptr) {
+                    continue;
+                }
+                candidates.push_back(tile);
+            }
+        }
+        std::vector<int> spots;
+        if (elevation == startElevation) spots.push_back(startTile);
+        const size_t want = std::min<size_t>(kSpotsPerElevation, candidates.size());
+        for (size_t i = 0; i < want; i++) spots.push_back(candidates[i * candidates.size() / want]);
+
+        for (int spot : spots) {
+            if (map_elevation != elevation) map_set_elevation(elevation);
+            obj_move_to_tile(obj_dude, spot, elevation, nullptr);
+            for (int heading = 0; heading < 24; heading += 6) {
+                gFirstPersonHeading = heading;
+                gFirstPersonPitchDegrees = 0.0;
+                gFirstPersonCameraRevision++;
+                const Uint64 start = SDL_GetPerformanceCounter();
+                first_person_render_now();
+                const double ms = (SDL_GetPerformanceCounter() - start) * 1000.0
+                    / static_cast<double>(SDL_GetPerformanceFrequency());
+                size_t covered = 0;
+                std::vector<int> ids;
+                for (const FirstPersonPick& pick : gFirstPersonPicks) {
+                    if (pick.object == nullptr) continue;
+                    covered++;
+                    if (ids.empty() || ids.back() != pick.id) ids.push_back(pick.id);
+                }
+                std::sort(ids.begin(), ids.end());
+                ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
+                const double coverage = gFirstPersonPicks.empty() ? -1.0
+                    : static_cast<double>(covered) / gFirstPersonPicks.size();
+                std::fprintf(out, "FRAME\t%s\t%d\t%d\t%d\t%.2f\t%.3f\t%zu\t%s\n", mapName, elevation,
+                    spot, heading, ms, coverage, ids.size(), gFirstPersonLastFrameGpu ? "gpu" : "software");
+                frames++;
+                progress();
+            }
+            std::fflush(out);
+        }
+    }
+    if (map_elevation != startElevation) map_set_elevation(startElevation);
+    obj_move_to_tile(obj_dude, startTile, startElevation, nullptr);
+    return frames;
+}
+
+} // namespace fallout
