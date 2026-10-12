@@ -256,6 +256,17 @@ struct FirstPersonObjectSprite {
     double z;
 };
 
+// Converts an isometric screen-pixel offset on the ground plane (a native
+// object's sub-tile x/y shift) into a renderer world-plane displacement; the
+// inverse of the floor mapping's basis.
+static void first_person_iso_to_world(double isoX, double isoY, double* worldX, double* worldY)
+{
+    constexpr double kIsoXFromWorldX = 27.712812921102035;
+    constexpr double kIsoYFromWorldX = -6.928203230275509;
+    constexpr double kDeterminant = kIsoXFromWorldX * 12.0 - 16.0 * kIsoYFromWorldX;
+    *worldX = (12.0 * isoX - 16.0 * isoY) / kDeterminant;
+    *worldY = (-kIsoYFromWorldX * isoX + kIsoXFromWorldX * isoY) / kDeterminant;
+}
 
 struct FirstPersonFloorArt {
     int fid;
@@ -2513,6 +2524,15 @@ static void first_person_render_now()
         double objectWorldX;
         double objectWorldY;
         tileToWorld(object->tile, &objectWorldX, &objectWorldY);
+        if (type == OBJ_TYPE_CRITTER && (object->x != 0 || object->y != 0)) {
+            // Native walking moves a critter between hexes through its x/y
+            // screen shift before it hops to the next tile.
+            double shiftX;
+            double shiftY;
+            first_person_iso_to_world(object->x, object->y, &shiftX, &shiftY);
+            objectWorldX += shiftX;
+            objectWorldY += shiftY;
+        }
         const double dx = objectWorldX - playerWorldX;
         const double dy = objectWorldY - playerWorldY;
         const double cameraX = dx * rightX + dy * rightY;
@@ -2611,8 +2631,18 @@ static void first_person_render_now()
         // Project the actual ground anchor, even when it is below the viewport.
         // Clipping belongs to the draw bounds, not to object placement: pinning
         // this baseline to the screen made nearby scenery/corpses float upward.
-        const int bottom = horizon + static_cast<int>(focal * kEyeHeight / object.z);
-        const int left = centerX - projectedWidth / 2;
+        int bottom = horizon + static_cast<int>(focal * kEyeHeight / object.z);
+        int left = centerX - projectedWidth / 2;
+        const double pixelScale = static_cast<double>(projectedHeight) / frame->height;
+        if (object.type == OBJ_TYPE_CRITTER) {
+            // The native anchor: the frame pixel that lands on the hex is
+            // offset from the frame's bottom centre by the direction's offsets.
+            left += static_cast<int>(std::lround(art->xOffsets[object.direction] * pixelScale));
+            bottom += static_cast<int>(std::lround(art->yOffsets[object.direction] * pixelScale));
+        } else if (object.type == OBJ_TYPE_ITEM && opaqueMaxY >= 0) {
+            // Items rest their lowest visible pixel on the floor.
+            bottom += static_cast<int>(std::lround((frame->height - 1 - opaqueMaxY) * pixelScale));
+        }
         const int top = bottom - projectedHeight;
         renderedObjectBounds.push_back({
             object.object,
@@ -3510,6 +3540,52 @@ int first_person_sweep_map(std::FILE* out, const char* mapName, void (*progress)
                 if ((square[elevation]->field_0[i] & 0xFFF) != 1) floored++;
             }
             std::fprintf(out, "CEILING\t%s\t%d\t%d\t%d\n", mapName, elevation, enclosed, floored);
+        }
+
+        // Sprite anchoring: native art offsets and the empty rows below each
+        // critter's and item's current frame, in isometric pixels.
+        for (int spriteType : { OBJ_TYPE_CRITTER, OBJ_TYPE_ITEM }) {
+            int sprites = 0;
+            int sumX = 0;
+            int sumY = 0;
+            int maxY = 0;
+            int sumMargin = 0;
+            int maxMargin = 0;
+            for (Object* object = obj_find_first_at(elevation); object != nullptr; object = obj_find_next_at()) {
+                if (FID_TYPE(object->fid) != spriteType || object->tile < 0 || object == obj_dude) continue;
+                CacheEntry* entry = nullptr;
+                Art* art = art_ptr_lock(object->fid, &entry);
+                if (art == nullptr) continue;
+                const int direction = ((object->rotation % ROTATION_COUNT) + ROTATION_COUNT) % ROTATION_COUNT;
+                const int frameNumber = std::clamp(object->frame, 0, std::max(0, art_frame_max_frame(art) - 1));
+                ArtFrame* frame = frame_ptr(art, frameNumber, direction);
+                const unsigned char* pixels = art_frame_data(art, frameNumber, direction);
+                if (frame != nullptr && pixels != nullptr && frame->width > 0 && frame->height > 0) {
+                    int lowest = -1;
+                    for (int y = frame->height - 1; y >= 0 && lowest < 0; y--) {
+                        for (int x = 0; x < frame->width; x++) {
+                            if (pixels[y * frame->width + x] != 0) {
+                                lowest = y;
+                                break;
+                            }
+                        }
+                    }
+                    const int margin = lowest < 0 ? 0 : frame->height - 1 - lowest;
+                    sprites++;
+                    sumX += std::abs(art->xOffsets[direction]);
+                    sumY += std::abs(art->yOffsets[direction]);
+                    maxY = std::max(maxY, std::abs(static_cast<int>(art->yOffsets[direction])));
+                    sumMargin += margin;
+                    maxMargin = std::max(maxMargin, margin);
+                }
+                art_ptr_unlock(entry);
+            }
+            if (sprites > 0) {
+                std::fprintf(out, "SPRITES\t%s\t%d\t%s\t%d\t%.1f\t%.1f\t%d\t%.1f\t%d\n", mapName, elevation,
+                    spriteType == OBJ_TYPE_CRITTER ? "critter" : "item", sprites,
+                    static_cast<double>(sumX) / sprites, static_cast<double>(sumY) / sprites, maxY,
+                    static_cast<double>(sumMargin) / sprites, maxMargin);
+            }
         }
 
         // Unblocked hexes on a coarse grid, near walls or scenery (within

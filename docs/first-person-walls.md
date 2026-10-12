@@ -1378,3 +1378,18 @@ g++ -std=c++17 -Wall -Wextra -Werror -Isrc tests/first_person_ceiling_test.cc -o
 /tmp/fp-ceiling-test
 ```
 
+### Native sprite anchors
+
+Critter billboards now use the native anchor. Native drawing puts a frame's
+bottom centre at the hex centre plus the art's per-direction offsets plus the
+object's sub-tile x/y shift. First person converts the x/y shift (which native
+walking builds up before each hex hop) into a world displacement, so walking
+critters move smoothly instead of popping between hexes, and shifts the
+billboard by the shown direction's offsets so the frame's contact point lands
+on the floor. Items rest their lowest visible pixel on the floor instead: their
+offsets are isometric placement and would shift or sink them. Scenery is
+unchanged. The sweep's `SPRITES` rows (count, mean |x|/|y| offsets, worst
+|y|, mean and worst empty rows under the frame) measured critter offsets of
+2-7 px (24 in CAVES) with no empty rows, and items with 13 px offsets and 3.8 px
+of empty rows (worst 47).
+
