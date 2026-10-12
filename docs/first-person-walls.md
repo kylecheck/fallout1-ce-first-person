@@ -1553,6 +1553,16 @@ the same 151x142 arch art as the `v13secr6` doorway and now goes through that
 profile, showing its live frame five columns wide: open, the gear has rolled
 aside and the arch stays, where sliding the closed frame away removed both.
 
+The cave's rolling vault door is two pieces on one hex: the frame
+(`v13secr3`, generic scenery) and the gear on its rail (`v13secr2`, the door).
+The gear's round top defeats the top-edge test, so a door whose top fails is
+judged by its bottom edge (`first_person_sprite_edge_axis`); edges now need
+only their best three quarters of columns on the slope, since the frame's
+left fifth is a side return. Large scenery (150+ px wide) within 2 hexes of a
+door whose top or bottom edge follows a wall slope is a door frame and stands
+flat on that line through its own hex instead of turning; cars, vats and rock
+masses with straight edges are not near doors and stay cards.
+
 ### Interior ceilings
 
 On elevations without roof tiles, when the walkable area does not come within

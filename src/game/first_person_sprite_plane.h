@@ -382,17 +382,21 @@ inline std::vector<FirstPersonSpriteFace> first_person_sprite_box_faces(const Fi
     return faces;
 }
 
-// The wall axis a frame's top edge runs along: the tops of its opaque
-// columns follow one wall slope within 2 px (ignoring the worst tenth), over
-// at least 12 columns. Door panels have notched or uneven bottoms, so only
-// the top is judged.
-inline FirstPersonSpriteWallAxis first_person_sprite_top_axis(const unsigned char* pixels, int width, int height)
+// The wall axis a frame's top (or bottom) edge runs along: the edge of its
+// opaque columns follows one wall slope within 2 px over the best three
+// quarters of its columns (a side return may take the rest), over at least
+// 12 columns. Door panels have notched or uneven
+// bottoms, and a rolling gear door a round top over a straight rail, so one
+// edge is judged at a time.
+inline FirstPersonSpriteWallAxis first_person_sprite_edge_axis(const unsigned char* pixels, int width, int height,
+    bool top)
 {
     if (pixels == nullptr || width < 12 || height <= 0) return FIRST_PERSON_SPRITE_AXIS_NONE;
     std::vector<double> xs;
     std::vector<double> tops;
     for (int x = 0; x < width; x++) {
-        for (int y = 0; y < height; y++) {
+        for (int i = 0; i < height; i++) {
+            const int y = top ? i : height - 1 - i;
             if (pixels[y * width + x] != 0) {
                 xs.push_back(x);
                 tops.push_back(y);
@@ -413,7 +417,7 @@ inline FirstPersonSpriteWallAxis first_person_sprite_top_axis(const unsigned cha
         std::vector<double> squares(xs.size());
         for (size_t i = 0; i < xs.size(); i++) squares[i] = (offsets[i] - offset) * (offsets[i] - offset);
         std::sort(squares.begin(), squares.end());
-        const size_t kept = xs.size() - xs.size() / 10;
+        const size_t kept = xs.size() - xs.size() / 4;
         double sum = 0.0;
         for (size_t i = 0; i < kept; i++) sum += squares[i];
         const double error = std::sqrt(sum / static_cast<double>(kept));
@@ -423,6 +427,11 @@ inline FirstPersonSpriteWallAxis first_person_sprite_top_axis(const unsigned cha
         }
     }
     return best;
+}
+
+inline FirstPersonSpriteWallAxis first_person_sprite_top_axis(const unsigned char* pixels, int width, int height)
+{
+    return first_person_sprite_edge_axis(pixels, width, height, true);
 }
 
 // A wall-painted frame on the vertical plane along axis through (lineX, lineY).

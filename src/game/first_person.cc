@@ -2077,6 +2077,10 @@ static void first_person_render_now()
                             unsigned char* closedPixels = art_frame_data(doorArt, 0, doorDirection);
                             if (closed != nullptr && closedPixels != nullptr) {
                                 found = first_person_sprite_top_axis(closedPixels, closed->width, closed->height);
+                                if (found == FIRST_PERSON_SPRITE_AXIS_NONE) {
+                                    found = first_person_sprite_edge_axis(closedPixels, closed->width, closed->height,
+                                        false);
+                                }
                             }
                             art_ptr_unlock(doorEntry);
                         }
@@ -3255,6 +3259,7 @@ static void first_person_render_now()
             FirstPersonSpriteWallAxis wallAxis;
             FirstPersonSpriteBoxFit box;
             bool flatFootprint;
+            FirstPersonSpriteWallAxis edgeAxis;
         };
         static std::unordered_map<std::uint64_t, OpaqueBounds> opaqueBoundsCache;
         auto cachedBounds = opaqueBoundsCache.find(spriteKey);
@@ -3262,7 +3267,12 @@ static void first_person_render_now()
             OpaqueBounds bounds { frame->width, frame->height, -1, -1,
                 first_person_sprite_wall_axis(pixels, frame->width, frame->height),
                 first_person_sprite_box_fit(pixels, frame->width, frame->height),
-                first_person_sprite_flat_footprint(pixels, frame->width, frame->height) };
+                first_person_sprite_flat_footprint(pixels, frame->width, frame->height),
+                frame->width >= 150 ? first_person_sprite_top_axis(pixels, frame->width, frame->height)
+                                    : FIRST_PERSON_SPRITE_AXIS_NONE };
+            if (bounds.edgeAxis == FIRST_PERSON_SPRITE_AXIS_NONE && frame->width >= 150) {
+                bounds.edgeAxis = first_person_sprite_edge_axis(pixels, frame->width, frame->height, false);
+            }
             for (int sy = 0; sy < frame->height; sy++) {
                 for (int sx = 0; sx < frame->width; sx++) {
                     if (pixels[sy * frame->width + sx] != 0) {
@@ -3356,6 +3366,23 @@ static void first_person_render_now()
                 }
             }
             const bool boxed = faces.size() > 1;
+            // A large door frame (scenery within 2 hexes of a door whose top
+            // or bottom edge runs along a wall slope: the vault door's frame)
+            // stands on that line through its own hex, flat as wall art is,
+            // rather than turning. Cars, vats and rock masses stay cards.
+            bool doorFrame = false;
+            if (faces.empty() && !looseItem && cachedBounds->second.edgeAxis != FIRST_PERSON_SPRITE_AXIS_NONE) {
+                for (int doorTile : doorTiles) {
+                    if (first_person_hex_distance(doorTile, native->tile) <= 2) {
+                        doorFrame = true;
+                        break;
+                    }
+                }
+            }
+            if (doorFrame) {
+                wholeFrame(first_person_sprite_wall_quad(hexX, hexY, cachedBounds->second.edgeAxis, hexX, hexY,
+                    frame->width, frame->height, offsetX, offsetY));
+            }
             if (faces.empty()) {
                 const double drop = object.type == OBJ_TYPE_ITEM && opaqueMaxY >= 0
                     ? static_cast<double>(frame->height - 1 - opaqueMaxY) / frame->height
