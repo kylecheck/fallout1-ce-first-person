@@ -64,6 +64,23 @@ inline void first_person_hud_blit(const unsigned char* source, int sourceWidth, 
         }
     }
 }
+// As first_person_hud_blit for a whole sprite, leaving its transparent
+// (index 0) pixels unwritten, e.g. an action icon over the world.
+inline void first_person_hud_blit_sprite(const unsigned char* source, int sourceWidth, int sourceHeight,
+    int x, int y, int scale, unsigned char* dest, int destWidth, int destHeight)
+{
+    for (int sy = 0; sy < sourceHeight * scale; sy++) {
+        const int dy = y + sy;
+        if (dy < 0 || dy >= destHeight) continue;
+        for (int sx = 0; sx < sourceWidth * scale; sx++) {
+            const int dx = x + sx;
+            const unsigned char pixel = source[(sy / scale) * sourceWidth + sx / scale];
+            if (dx < 0 || dx >= destWidth || pixel == 0) continue;
+            dest[dy * destWidth + dx] = pixel;
+        }
+    }
+}
+
 // Pip-Boy date/time strip: the top-left of PIP.FRM, filled with NUMBERS.FRM
 // digits and MONTHS.FRM names at the positions the Pip-Boy itself uses.
 constexpr FirstPersonHudRect kFirstPersonHudPipDate { 0, 0, 222, 48 };

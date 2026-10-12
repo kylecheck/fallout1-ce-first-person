@@ -671,44 +671,13 @@ void gmouse_bk_process()
 
                 Object* target = object_under_mouse(-1, true, map_elevation);
                 if (target != NULL) {
-                    int primaryAction = -1;
-
-                    switch (FID_TYPE(target->fid)) {
-                    case OBJ_TYPE_ITEM:
-                        primaryAction = GAME_MOUSE_ACTION_MENU_ITEM_USE;
-                        if (gmouse_3d_item_highlight) {
-                            Rect tmp;
-                            if (obj_outline_object(target, OUTLINE_TYPE_ITEM, &tmp) == 0) {
-                                tile_refresh_rect(&tmp, map_elevation);
-                                outlined_object = target;
-                            }
+                    const int primaryAction = gmouse_3d_primary_action(target);
+                    if (FID_TYPE(target->fid) == OBJ_TYPE_ITEM && gmouse_3d_item_highlight) {
+                        Rect tmp;
+                        if (obj_outline_object(target, OUTLINE_TYPE_ITEM, &tmp) == 0) {
+                            tile_refresh_rect(&tmp, map_elevation);
+                            outlined_object = target;
                         }
-                        break;
-                    case OBJ_TYPE_CRITTER:
-                        if (target == obj_dude) {
-                            primaryAction = GAME_MOUSE_ACTION_MENU_ITEM_ROTATE;
-                        } else {
-                            if (obj_action_can_talk_to(target)) {
-                                if (isInCombat()) {
-                                    primaryAction = GAME_MOUSE_ACTION_MENU_ITEM_LOOK;
-                                } else {
-                                    primaryAction = GAME_MOUSE_ACTION_MENU_ITEM_TALK;
-                                }
-                            } else {
-                                primaryAction = GAME_MOUSE_ACTION_MENU_ITEM_USE;
-                            }
-                        }
-                        break;
-                    case OBJ_TYPE_SCENERY:
-                        if (!proto_action_can_use(target->pid)) {
-                            primaryAction = GAME_MOUSE_ACTION_MENU_ITEM_LOOK;
-                        } else {
-                            primaryAction = GAME_MOUSE_ACTION_MENU_ITEM_USE;
-                        }
-                        break;
-                    case OBJ_TYPE_WALL:
-                        primaryAction = GAME_MOUSE_ACTION_MENU_ITEM_LOOK;
-                        break;
                     }
 
                     if (primaryAction != -1) {
@@ -1762,6 +1731,38 @@ Object* object_under_mouse(int objectType, bool a2, int elevation)
         }
     }
     return v4;
+}
+
+// The action shown on the hover cursor for target in arrow mode, or -1.
+// First person shares these rules for its reticle prompt.
+int gmouse_3d_primary_action(Object* target)
+{
+    switch (FID_TYPE(target->fid)) {
+    case OBJ_TYPE_ITEM:
+        return GAME_MOUSE_ACTION_MENU_ITEM_USE;
+    case OBJ_TYPE_CRITTER:
+        if (target == obj_dude) {
+            return GAME_MOUSE_ACTION_MENU_ITEM_ROTATE;
+        }
+        if (obj_action_can_talk_to(target)) {
+            return isInCombat() ? GAME_MOUSE_ACTION_MENU_ITEM_LOOK : GAME_MOUSE_ACTION_MENU_ITEM_TALK;
+        }
+        return GAME_MOUSE_ACTION_MENU_ITEM_USE;
+    case OBJ_TYPE_SCENERY:
+        return proto_action_can_use(target->pid) ? GAME_MOUSE_ACTION_MENU_ITEM_USE : GAME_MOUSE_ACTION_MENU_ITEM_LOOK;
+    case OBJ_TYPE_WALL:
+        return GAME_MOUSE_ACTION_MENU_ITEM_LOOK;
+    }
+    return -1;
+}
+
+// The interface art for an action menu item's icon.
+int gmouse_3d_action_icon_fid(int menuItem)
+{
+    if (menuItem < 0 || menuItem >= GAME_MOUSE_ACTION_MENU_ITEM_COUNT) {
+        return -1;
+    }
+    return art_id(OBJ_TYPE_INTERFACE, gmouse_3d_action_nums[menuItem], 0, 0, 0);
 }
 
 // 0x444A34

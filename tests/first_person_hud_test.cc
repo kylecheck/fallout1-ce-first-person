@@ -122,5 +122,15 @@ int main()
     assert(strip[0] == 9 && strip[17 * DW + 20] == 0);
     const FirstPersonHudPlacement date = first_person_hud_date_placement(deck.scale);
     assert(date.x == 8 && date.y == 8 && date.x + DW * 2 < 1280 - 570); // Clear of the top-right hints.
-    std::cout << "PASS first-person HUD layout, bar copies, clipping, Pip-Boy date strip and redraw signature\n";
+    // Sprite copy keeps transparency and clips.
+    const unsigned char icon[2 * 2] = { 0, 5, 6, 0 };
+    std::vector<unsigned char> view(6 * 6 + 16, 0xEE);
+    first_person_hud_blit_sprite(icon, 2, 2, 1, 1, 2, view.data(), 6, 6);
+    assert(view[1 * 6 + 1] == 0xEE && view[1 * 6 + 3] == 5 && view[2 * 6 + 4] == 5 && view[3 * 6 + 2] == 6);
+    assert(view[4 * 6 + 4] == 0xEE);
+    first_person_hud_blit_sprite(icon, 2, 2, 4, 4, 2, view.data(), 6, 6);
+    first_person_hud_blit_sprite(icon, 2, 2, -3, -3, 2, view.data(), 6, 6);
+    for (int i = 36; i < 52; i++) assert(view[i] == 0xEE);
+    assert(view[0] == 0xEE && view[4 * 6 + 2] == 6 && view[5 * 6 + 5] == 0xEE); // Fully clipped copies change nothing.
+    std::cout << "PASS first-person HUD layout, bar copies, clipping, Pip-Boy date strip, sprites and redraw signature\n";
 }

@@ -1344,3 +1344,11 @@ proxy over its whole doorway keeps it targetable, so it can be closed. Portal
 scenery (v13secr4/6) is unchanged. `tests/first_person_doorway_test.cc` covers
 progress and the slid segment.
 
+### Reticle action prompt
+
+When the reticle is on an object in move or interact mode, the native hover
+cursor's action icon (ACTARROW-menu art: talk, use/get, look, rotate) is drawn
+just right of the reticle at the HUD scale, with the object's name below it.
+The action comes from `gmouse_3d_primary_action`, extracted unchanged from
+`gmouse_bk_process`, so the prompt and the native cursor share one rule.
+The fuller verb text in the mode panel is unchanged.

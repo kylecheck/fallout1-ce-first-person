@@ -3281,6 +3281,41 @@ static void first_person_render_now()
         text_font(oldFont);
     }
 
+    // Reticle prompt: the native hover cursor's action icon for the target,
+    // chosen by the same rules (gmouse_3d_primary_action), and its name.
+    const int promptMode = first_person_mode();
+    if (firstPersonHoverObject != nullptr && firstPersonHoverObject != obj_dude
+        && (promptMode == GAME_MOUSE_MODE_ARROW || promptMode == GAME_MOUSE_MODE_MOVE)) {
+        const int scale = first_person_hud_layout(width, height).scale;
+        const int iconX = width / 2 + 12 * scale;
+        int iconBottom = height / 2 + 6 * scale;
+        CacheEntry* iconEntry = nullptr;
+        const int iconFid = gmouse_3d_action_icon_fid(gmouse_3d_primary_action(firstPersonHoverObject));
+        Art* icon = iconFid != -1 ? art_ptr_lock(iconFid, &iconEntry) : nullptr;
+        if (icon != nullptr) {
+            const unsigned char* iconData = art_frame_data(icon, 0, 0);
+            const int iconWidth = art_frame_width(icon, 0, 0);
+            const int iconHeight = art_frame_length(icon, 0, 0);
+            if (iconData != nullptr && iconWidth > 0 && iconHeight > 0) {
+                first_person_hud_blit_sprite(iconData, iconWidth, iconHeight, iconX,
+                    height / 2 - iconHeight * scale / 2, scale, buffer, width, height);
+                iconBottom = height / 2 - iconHeight * scale / 2 + iconHeight * scale + 2 * scale;
+            }
+            art_ptr_unlock(iconEntry);
+        }
+        if (const char* name = object_name(firstPersonHoverObject)) {
+            const int oldFont = text_curr();
+            text_font(101);
+            const int nameWidth = std::min(text_width(name), width / 3);
+            const int lineHeight = text_height();
+            if (iconBottom + lineHeight + 4 <= height && iconX + nameWidth + 4 <= width) {
+                buf_fill(buffer + iconBottom * width + iconX, nameWidth + 4, lineHeight + 4, width, colorTable[0]);
+                text_to_buf(buffer + (iconBottom + 2) * width + iconX + 2, name, nameWidth, width, colorTable[992]);
+            }
+            text_font(oldFont);
+        }
+    }
+
     // Controller status is diagnostic: show it only while recording input.
     static const bool showControllerStatus = std::getenv("FALLOUT_FP_INPUT_LOG") != nullptr;
     if (showControllerStatus) {
