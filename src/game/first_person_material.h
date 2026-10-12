@@ -84,5 +84,49 @@ inline FirstPersonRectifiedMaterial first_person_rectify_columns(
     return result;
 }
 
+// A wall face that backs onto solid rock or void must not be see-through.
+// Fills each transparent (0) pixel from the nearest opaque pixel in its
+// column, passed through shade (e.g. the native intensity table), then fills
+// fully transparent columns from the nearest filled column. A face with no
+// opaque pixel is left unchanged.
+template <typename Shade>
+void first_person_fill_material_holes(std::vector<unsigned char>& pixels, int width, int height, Shade shade)
+{
+    if (width <= 0 || height <= 0 || static_cast<int>(pixels.size()) < width * height) return;
+    std::vector<unsigned char> source = pixels;
+    std::vector<unsigned char> filledColumn(width, 0);
+    for (int x = 0; x < width; x++) {
+        for (int y = 0; y < height; y++) {
+            if (source[y * width + x] != 0) continue;
+            int best = -1;
+            for (int d = 1; d < height && best < 0; d++) {
+                if (y - d >= 0 && source[(y - d) * width + x] != 0) best = y - d;
+                else if (y + d < height && source[(y + d) * width + x] != 0) best = y + d;
+            }
+            if (best < 0) break; // The whole column is transparent.
+            const unsigned char shaded = shade(source[best * width + x]);
+            pixels[y * width + x] = shaded != 0 ? shaded : source[best * width + x];
+        }
+        bool opaque = true;
+        for (int y = 0; y < height && opaque; y++) opaque = pixels[y * width + x] != 0;
+        filledColumn[x] = opaque ? 1 : 0;
+    }
+    for (int x = 0; x < width; x++) {
+        if (filledColumn[x]) continue;
+        int from = -1;
+        for (int d = 1; d < width && from < 0; d++) {
+            if (x - d >= 0 && filledColumn[x - d]) from = x - d;
+            else if (x + d < width && filledColumn[x + d]) from = x + d;
+        }
+        if (from < 0) return; // No opaque pixel anywhere.
+        for (int y = 0; y < height; y++) {
+            if (pixels[y * width + x] == 0) {
+                const unsigned char shaded = shade(pixels[y * width + from]);
+                pixels[y * width + x] = shaded != 0 ? shaded : pixels[y * width + from];
+            }
+        }
+    }
+}
+
 } // namespace fallout
 #endif
