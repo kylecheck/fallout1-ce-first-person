@@ -46,6 +46,7 @@
 #include "game/inventry.h"
 #include "game/item.h"
 #include "game/map.h"
+#include "game/textobj.h"
 #include "game/object_types.h"
 #include "game/tile.h"
 #include "game/object.h"
@@ -790,9 +791,23 @@ void first_person_update()
             // The Pip-Boy strip shows the native clock to the minute.
             static int lastClock = -1;
             const int clock = game_time_hour();
-            if (hud != lastHud || clock != lastClock) {
+            // Speech bubbles follow the native floating texts.
+            static std::uint64_t lastTexts = 0;
+            std::uint64_t texts = 1469598103934665603ull;
+            {
+                Object* owner;
+                const unsigned char* data;
+                int textWidth;
+                int textHeight;
+                unsigned int time;
+                for (int i = 0; text_object_get(i, &owner, &data, &textWidth, &textHeight, &time); i++) {
+                    texts = (texts ^ reinterpret_cast<std::uintptr_t>(data) ^ time) * 1099511628211ull;
+                }
+            }
+            if (hud != lastHud || clock != lastClock || texts != lastTexts) {
                 lastHud = hud;
                 lastClock = clock;
+                lastTexts = texts;
                 first_person_render();
             }
         }
@@ -4204,6 +4219,63 @@ static void first_person_render_now()
         }
     }
 
+    // Speech bubbles: native floating texts (what critters say as the player
+    // passes, barks in combat) drawn above their speaker in the view instead
+    // of at the speaker's isometric position. Text the native draws without
+    // an owner, or whose owner is off screen, gets no bubble.
+    {
+        const int scale = std::max(1, first_person_hud_layout(width, height).scale);
+        Object* owner;
+        const unsigned char* data;
+        int textWidth;
+        int textHeight;
+        unsigned int time;
+        for (int i = 0; text_object_get(i, &owner, &data, &textWidth, &textHeight, &time); i++) {
+            if (owner == nullptr || data == nullptr || textWidth <= 0 || textHeight <= 0) continue;
+            const FirstPersonRenderedBounds* speaker = nullptr;
+            for (const FirstPersonRenderedBounds& bounds : renderedObjectBounds) {
+                if (bounds.object == owner && bounds.id == owner->id) {
+                    speaker = &bounds;
+                    break;
+                }
+            }
+            if (speaker == nullptr) continue;
+            const int padding = 3 * scale;
+            const int tail = 6 * scale;
+            const FirstPersonHudBubble bubble = first_person_hud_bubble((speaker->left + speaker->right) / 2,
+                speaker->top, textWidth * scale, textHeight * scale, padding, tail, width, height, 200);
+            const int fill = colorTable[0];
+            const int edge = colorTable[992];
+            auto plot = [&](int x, int y, int color) {
+                if (x >= 0 && y >= 0 && x < width && y < height) buffer[y * width + x] = static_cast<unsigned char>(color);
+            };
+            for (int y = bubble.top; y < bubble.top + bubble.height; y++) {
+                for (int x = bubble.left; x < bubble.left + bubble.width; x++) {
+                    const bool border = y < bubble.top + scale || y >= bubble.top + bubble.height - scale
+                        || x < bubble.left + scale || x >= bubble.left + bubble.width - scale;
+                    plot(x, y, border ? edge : fill);
+                }
+            }
+            // Tail: a narrowing wedge from the box's bottom edge to the speaker.
+            const int baseY = bubble.top + bubble.height;
+            const int span = std::max(1, bubble.tailTipY - baseY);
+            for (int step = 0; step <= span; step++) {
+                const double t = static_cast<double>(step) / span;
+                const int cx = static_cast<int>(std::lround(bubble.tailBaseX + (bubble.tailTipX - bubble.tailBaseX) * t));
+                const int half = static_cast<int>(std::lround((tail / 2) * (1.0 - t)));
+                for (int dx = -half - scale; dx <= half + scale; dx++) {
+                    plot(cx + dx, baseY - scale + step, std::abs(dx) > half ? edge : fill);
+                }
+            }
+            for (int y = 0; y < textHeight * scale; y++) {
+                for (int x = 0; x < textWidth * scale; x++) {
+                    const unsigned char pixel = data[(y / scale) * textWidth + x / scale];
+                    if (pixel != 0) plot(bubble.left + padding + x, bubble.top + padding + y, pixel);
+                }
+            }
+        }
+    }
+
     // Pip-Boy date/time strip, top-left, from the Pip-Boy's own art and the
     // native game clock. Everything below it in the top band moves down.
     int topInset = 0;
@@ -5077,6 +5149,19 @@ int first_person_sweep_map(std::FILE* out, const char* mapName, void (*progress)
             const int spot = spots[spotIndex];
             if (map_elevation != elevation) map_set_elevation(elevation);
             obj_move_to_tile(obj_dude, spot, elevation, nullptr);
+            // FALLOUT_FP_SWEEP_SAY=<text>: every critter within 10 hexes says
+            // it, as a script's float_msg would, to check speech bubbles.
+            if (const char* say = std::getenv("FALLOUT_FP_SWEEP_SAY")) {
+                for (Object* object = obj_find_first_at(elevation); object != nullptr; object = obj_find_next_at()) {
+                    if (FID_TYPE(object->fid) != OBJ_TYPE_CRITTER || object == obj_dude
+                        || first_person_hex_distance(object->tile, spot) > 10) {
+                        continue;
+                    }
+                    char line[256];
+                    std::snprintf(line, sizeof(line), "%s", say);
+                    text_object_create(object, line, 101, colorTable[32747], colorTable[0], nullptr);
+                }
+            }
             const int firstHeading = spotHeadings[spotIndex] >= 0 ? spotHeadings[spotIndex] : 0;
             const int lastHeading = spotHeadings[spotIndex] >= 0 ? spotHeadings[spotIndex] : 18;
             for (int heading = firstHeading; heading <= lastHeading; heading += 6) {

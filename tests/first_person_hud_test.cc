@@ -132,5 +132,17 @@ int main()
     first_person_hud_blit_sprite(icon, 2, 2, -3, -3, 2, view.data(), 6, 6);
     for (int i = 36; i < 52; i++) assert(view[i] == 0xEE);
     assert(view[0] == 0xEE && view[4 * 6 + 2] == 6 && view[5 * 6 + 5] == 0xEE); // Fully clipped copies change nothing.
+    // Speech bubbles: centred above the speaker, tail down to it; kept on
+    // screen and below the top band, the tail still pointing at the speaker.
+    {
+        const FirstPersonHudBubble b = first_person_hud_bubble(500, 300, 100, 20, 3, 6, 1000, 800, 50);
+        assert(b.width == 106 && b.height == 26);
+        assert(b.left == 447 && b.top == 300 - 6 - 26);
+        assert(b.tailTipX == 500 && b.tailTipY == 300 && b.tailBaseX == 500);
+        const FirstPersonHudBubble edge = first_person_hud_bubble(990, 20, 100, 20, 3, 6, 1000, 800, 50);
+        assert(edge.left + edge.width <= 998 && edge.top == 50);
+        assert(edge.tailTipX == 990 && edge.tailTipY == 76);
+        assert(edge.tailBaseX <= edge.left + edge.width - 6);
+    }
     std::cout << "PASS first-person HUD layout, bar copies, clipping, Pip-Boy date strip, sprites and redraw signature\n";
 }

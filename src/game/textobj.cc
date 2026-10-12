@@ -351,6 +351,21 @@ void text_object_render(Rect* rect)
     }
 }
 
+bool text_object_get(int index, Object** owner, const unsigned char** data, int* width, int* height,
+    unsigned int* time)
+{
+    if (!text_object_initialized || index < 0 || index >= text_object_index) {
+        return false;
+    }
+    TextObject* textObject = text_object_list[index];
+    *owner = (textObject->flags & TEXT_OBJECT_UNBOUNDED) != 0 ? NULL : textObject->owner;
+    *data = textObject->data;
+    *width = textObject->width;
+    *height = textObject->height;
+    *time = textObject->time;
+    return true;
+}
+
 // 0x49D438
 int text_object_count()
 {

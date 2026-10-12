@@ -1731,3 +1731,16 @@ the first map, and prints `VIEWMODELART index name art` lines.
 ```sh
 g++ -std=c++17 -Wall -Wextra -Werror -Isrc tests/first_person_viewmodel_test.cc -o /tmp/fp-viewmodel-test && /tmp/fp-viewmodel-test
 ```
+
+### Speech bubbles
+
+Native floating text (what critters say as the player passes, combat barks,
+script `float_msg`) is drawn by `textobj.cc` into the isometric map at the
+speaker's isometric position, which first person does not show. First person
+now reads the live text objects (`text_object_get`, read-only) and draws each
+one with an owner in a black bubble with a green edge and a tail, centred
+above the speaker's rendered screen bounds and kept on screen below the top
+band, the original text image scaled by the HUD scale. Text whose speaker is
+not rendered gets no bubble. A text appearing or expiring redraws the view.
+`FALLOUT_FP_SWEEP_SAY=<text>` makes every critter within 10 hexes of each
+sweep spot say it.

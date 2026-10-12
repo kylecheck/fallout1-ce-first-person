@@ -147,5 +147,35 @@ inline std::uint64_t first_person_hud_signature(const unsigned char* source, int
     }
     return hash;
 }
+// A speech bubble above a speaker: the box (with its padding) centred over
+// the anchor (the top centre of the speaker on screen), kept inside the view
+// below the top band, and the tail from the box's bottom to the anchor. When
+// the box has to move off the anchor the tail still points at it.
+struct FirstPersonHudBubble {
+    int left;
+    int top;
+    int width;
+    int height;
+    int tailBaseX;
+    int tailTipX;
+    int tailTipY;
+};
+
+inline FirstPersonHudBubble first_person_hud_bubble(int anchorX, int anchorY, int textWidth, int textHeight,
+    int padding, int tail, int viewWidth, int viewHeight, int topInset)
+{
+    FirstPersonHudBubble bubble {};
+    bubble.width = textWidth + padding * 2;
+    bubble.height = textHeight + padding * 2;
+    bubble.left = anchorX - bubble.width / 2;
+    bubble.top = anchorY - tail - bubble.height;
+    bubble.left = std::max(2, std::min(bubble.left, viewWidth - 2 - bubble.width));
+    bubble.top = std::max(topInset, std::min(bubble.top, viewHeight - 2 - bubble.height));
+    bubble.tailTipX = std::max(0, std::min(anchorX, viewWidth - 1));
+    bubble.tailTipY = std::max(bubble.top + bubble.height, std::min(anchorY, viewHeight - 1));
+    bubble.tailBaseX = std::max(bubble.left + tail, std::min(bubble.tailTipX, bubble.left + bubble.width - tail));
+    return bubble;
+}
+
 }
 #endif
