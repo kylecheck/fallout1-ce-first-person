@@ -1300,7 +1300,8 @@ its map), `FRAME map elevation tile heading ms coverage objects renderer`
 roofSquares walls wallsUnderRoof bestOffsetX bestOffsetY wallsAtBest` (see
 ceilings below) and `DONE map frames`.
 A map with no progress for 60 s is written as `STUCK` and ends the run;
-`FALLOUT_FP_MAP_SWEEP_FROM=<index>` resumes after it. Combine with
+`FALLOUT_FP_MAP_SWEEP_FROM=<index>` resumes after it. The sweep ignores SIGTERM
+(SDL turns it into a quit event that is never read); stop it with `kill -9`. Combine with
 `FALLOUT_FP_HEAP_CHECK=1` to validate the art cache after every frame. It runs
 without a display:
 
@@ -1352,3 +1353,28 @@ just right of the reticle at the HUD scale, with the object's name below it.
 The action comes from `gmouse_3d_primary_action`, extracted unchanged from
 `gmouse_bk_process`, so the prompt and the native cursor share one rule.
 The fuller verb text in the mode panel is unchanged.
+
+### Ceilings for roofless elevations
+
+Vault, cave and similar elevations have no roof tiles at all. On those, a
+flood from the map's edge rows across hexes (native `dir_tile` adjacency,
+without `tile_num_in_direction`'s edge stop) marks the outdoors. Barriers are
+what native movement stops at: walls, doors, `block.frm` and blocking scenery
+such as cave rock. Unreached pockets are indoors only if they touch at least
+three wall tiles, so a gap closed off by rocks, wagons or crates stays outdoors.
+Indoor squares, and barrier-only squares beside them (thick walls), get a
+ceiling at the structural height from their own floor tile, darkened through
+`intensityColorTable` at 80/128. The result is cached per map elevation, so a
+frame only draws it. Elevations with any roof tiles are unchanged.
+
+The sweep's `CEILING map elevation enclosedSquares flooredSquares` rows show
+the result: every Vault 13 elevation, VAULTBUR, VAULTNEC, V13ENT, the Mariposa
+vats and storage levels, Glow, the caves and mountain passes are covered; the
+only small pockets elsewhere are COLATRUK (7 squares) and RAIDERS elevation 1
+(20).
+
+```sh
+g++ -std=c++17 -Wall -Wextra -Werror -Isrc tests/first_person_ceiling_test.cc -o /tmp/fp-ceiling-test
+/tmp/fp-ceiling-test
+```
+

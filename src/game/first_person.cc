@@ -7,6 +7,7 @@
 #include "game/first_person_projection.h"
 #include "game/first_person_frame.h"
 #include "game/first_person_wall.h"
+#include "game/first_person_ceiling.h"
 #include "game/first_person_doorway.h"
 #include "game/first_person_facing.h"
 #include "game/first_person_material.h"
@@ -254,6 +255,7 @@ struct FirstPersonObjectSprite {
     double x;
     double z;
 };
+
 
 struct FirstPersonFloorArt {
     int fid;
@@ -1115,6 +1117,46 @@ void first_person_flush_render()
     first_person_heap_check(gFirstPersonLastFrameGpu ? "fp-frame-gpu" : "fp-frame-software");
 }
 
+// Squares that get a synthesized ceiling on an elevation without roof tiles
+// (see first_person_ceiling.h). Walls, doors and invisible blockers bound
+// the indoors. Cached per map elevation; empty when the elevation has roofs.
+static const std::vector<unsigned char>& first_person_enclosed_ceiling(int elevation)
+{
+    static char cachedMap[sizeof(map_data.name)] = {};
+    static int cachedElevation = -1;
+    static std::vector<unsigned char> squares;
+    if (cachedElevation == elevation && std::strncmp(cachedMap, map_data.name, sizeof(cachedMap)) == 0) {
+        return squares;
+    }
+    std::memcpy(cachedMap, map_data.name, sizeof(cachedMap));
+    cachedElevation = elevation;
+    squares.assign(kFirstPersonSquareCount, 0);
+
+    const int noRoofFid = art_id(OBJ_TYPE_TILE, 1, 0, 0, 0);
+    for (int i = 0; i < SQUARE_GRID_SIZE; i++) {
+        if (art_id(OBJ_TYPE_TILE, (square[elevation]->field_0[i] >> 16) & 0xFFF, 0, 0, 0) != noRoofFid) {
+            return squares;
+        }
+    }
+    std::vector<unsigned char> barrier(kFirstPersonTileCount, 0);
+    for (Object* object = obj_find_first_at(elevation); object != nullptr; object = obj_find_next_at()) {
+        if (object->tile < 0 || object->tile >= kFirstPersonTileCount) continue;
+        const int type = FID_TYPE(object->fid);
+        if (type == OBJ_TYPE_WALL) {
+            barrier[object->tile] = kFirstPersonWallBarrier;
+        } else if (type == OBJ_TYPE_SCENERY && barrier[object->tile] == 0) {
+            // Doors and blocking scenery (cave rock, invisible blockers) bound
+            // the indoors too, as they bound native movement.
+            Proto* proto = nullptr;
+            const bool door = PID_TYPE(object->pid) == OBJ_TYPE_SCENERY && proto_ptr(object->pid, &proto) == 0
+                && proto != nullptr && proto->scenery.type == SCENERY_TYPE_DOOR;
+            if (door || (object->flags & OBJECT_NO_BLOCK) == 0) barrier[object->tile] = kFirstPersonBarrier;
+        }
+    }
+    squares = first_person_enclosed_squares(barrier, first_person_hex_neighbor);
+    return squares;
+}
+
 static void first_person_render_now()
 {
     gFirstPersonLastFrameGpu = false;
@@ -1268,6 +1310,14 @@ static void first_person_render_now()
         const int fid = art_id(OBJ_TYPE_TILE, (squareData >> 16) & 0xFFF, 0, 0, 0);
         return fid == noRoofFid ? -1 : fid;
     };
+    // Roofless elevations: enclosed squares use their own floor tile,
+    // darkened through the native intensity table, as the ceiling.
+    const std::vector<unsigned char>& enclosedCeiling = first_person_enclosed_ceiling(map_elevation);
+    constexpr int kSynthesizedCeilingIntensity = 80; // Of 128.
+    auto darken = [](unsigned char pixel) {
+        const unsigned char dark = intensityColorTable[pixel][kSynthesizedCeilingIntensity];
+        return dark != 0 ? dark : pixel;
+    };
     constexpr double kIsoXFromWorldX = 27.712812921102035;
     constexpr double kIsoYFromWorldX = -6.928203230275509;
 
@@ -1277,7 +1327,7 @@ static void first_person_render_now()
     // The game is already palette/pixel-art based, so this is a useful speed
     // bridge without changing the authoritative projection or world mapping.
     if (gpuWorld) {
-        struct FloorFace { int fid; int width; int height; std::vector<unsigned char> pixels; };
+        struct FloorFace { int fid; bool dark; int width; int height; std::vector<unsigned char> pixels; };
         std::vector<FloorFace> floorFaces;
         for (int tile = 0; tile < SQUARE_GRID_SIZE; tile++) {
             int ix = 0, iy = 0;
@@ -1290,9 +1340,15 @@ static void first_person_render_now()
             if (z < -4.0 || z > kFarPlane + 4.0 || std::hypot(dx, dy) > kFarPlane + 4.0) continue;
             const int squareData = square[map_elevation]->field_0[tile];
             const int floorFid = art_id(OBJ_TYPE_TILE, squareData & 0xFFF, 0, 0, 0);
-            const int ceilingFid = roofFid(squareData);
+            int ceilingFid = roofFid(squareData);
+            bool darkCeiling = false;
+            if (ceilingFid == -1 && enclosedCeiling[tile]) {
+                ceilingFid = floorFid;
+                darkCeiling = true;
+            }
             for (int layer = 0; layer < 2; layer++) {
                 const int fid = layer == 0 ? floorFid : ceilingFid;
+                const bool dark = layer == 1 && darkCeiling;
                 if (fid == -1) continue;
                 const double planeHeight = layer == 0 ? kEyeHeight : kEyeHeight - kCeilingHeight;
                 FirstPersonFloorArt* art = getFloorArt(fid);
@@ -1313,15 +1369,18 @@ static void first_person_render_now()
                 // rectangular floor FRMs as competing pieces of geometry.
                 FloorFace* face = nullptr;
                 for (auto& cached : floorFaces) {
-                    if (cached.fid == fid) { face = &cached; break; }
+                    if (cached.fid == fid && cached.dark == dark) { face = &cached; break; }
                 }
                 if (!face) {
-                    FloorFace masked { fid, art->frame->width, art->frame->height, {} };
+                    FloorFace masked { fid, dark, art->frame->width, art->frame->height, {} };
                     masked.pixels.assign(art->pixels, art->pixels + masked.width * masked.height);
                     for (int y = 0; y < masked.height; y++) {
                         for (int x = 0; x < masked.width; x++) {
+                            unsigned char& pixel = masked.pixels[y * masked.width + x];
                             if (square_num(ix + x, iy + y, map_elevation) != tile) {
-                                masked.pixels[y * masked.width + x] = 0;
+                                pixel = 0;
+                            } else if (dark && pixel != 0) {
+                                pixel = darken(pixel);
                             }
                         }
                     }
@@ -1360,7 +1419,11 @@ static void first_person_render_now()
             }
 
             const int floorData = square[map_elevation]->field_0[squareTile];
-            const int fid = ceiling ? roofFid(floorData) : art_id(OBJ_TYPE_TILE, floorData & 0xFFF, 0, 0, 0);
+            int fid = ceiling ? roofFid(floorData) : art_id(OBJ_TYPE_TILE, floorData & 0xFFF, 0, 0, 0);
+            const bool dark = ceiling && fid == -1 && enclosedCeiling[squareTile];
+            if (dark) {
+                fid = art_id(OBJ_TYPE_TILE, floorData & 0xFFF, 0, 0, 0);
+            }
             if (fid == -1) {
                 continue;
             }
@@ -1383,7 +1446,10 @@ static void first_person_render_now()
                 continue;
             }
 
-            const unsigned char pixel = floorArt->pixels[sourceY * floorArt->frame->width + sourceX];
+            unsigned char pixel = floorArt->pixels[sourceY * floorArt->frame->width + sourceX];
+            if (pixel != 0 && dark) {
+                pixel = darken(pixel);
+            }
             if (pixel != 0) {
                 for (int blockY = 0; blockY < kFloorSampleStep && screenY + blockY < height; blockY++) {
                     for (int blockX = 0; blockX < kFloorSampleStep && screenX + blockX < width; blockX++) {
@@ -3437,6 +3503,13 @@ int first_person_sweep_map(std::FILE* out, const char* mapName, void (*progress)
             }
             std::fprintf(out, "ROOF\t%s\t%d\t%d\t%d\t%d\t%d\t%d\t%d\n", mapName, elevation, roofSquares,
                 walls, counts[3][3], bestX, bestY, counts[bestY + 3][bestX + 3]);
+            int enclosed = 0;
+            for (unsigned char covered : first_person_enclosed_ceiling(elevation)) enclosed += covered;
+            int floored = 0;
+            for (int i = 0; i < SQUARE_GRID_SIZE; i++) {
+                if ((square[elevation]->field_0[i] & 0xFFF) != 1) floored++;
+            }
+            std::fprintf(out, "CEILING\t%s\t%d\t%d\t%d\n", mapName, elevation, enclosed, floored);
         }
 
         // Unblocked hexes on a coarse grid, near walls or scenery (within
