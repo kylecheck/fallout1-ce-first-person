@@ -2,6 +2,7 @@
 #include "game/gamepad.h"
 #include "game/first_person_gpu.h"
 #include "game/first_person_heap_check.h"
+#include "game/first_person_hex.h"
 #include "game/first_person_hud.h"
 #include "game/first_person_world_gpu.h"
 #include "game/first_person_projection.h"
@@ -2566,13 +2567,16 @@ static void first_person_render_now()
     // their real map hex. It gives us a much more complete scene while the
     // wall reconstruction work remains independent.
     std::vector<FirstPersonObjectSprite> objectSprites;
+    // Scenery art that is never drawn (invisible blockers, portal scenery),
+    // by art id: the names never change.
+    static std::unordered_map<int, bool> hiddenSceneryArt;
     for (Object* object = obj_find_first_at(map_elevation);
          object != nullptr;
          object = obj_find_next_at()) {
         if (object == obj_dude
             || object->tile < 0
             || (object->flags & OBJECT_HIDDEN) != 0
-            || tile_dist(obj_dude->tile, object->tile) > kRenderRadius) {
+            || first_person_hex_distance(obj_dude->tile, object->tile) > kRenderRadius) {
             continue;
         }
 
@@ -2588,11 +2592,16 @@ static void first_person_render_now()
             // Native invisible collision helpers are not visible scenery. The
             // wall collector already treats this art as topology-only; do the
             // same here before it can write pixels, depth, or pick IDs.
-            char artName[64] = { 0 };
-            if (art_get_base_name(type, object->fid & 0xFFF, artName) == 0
-                && (std::strcmp(artName, "block.frm") == 0
-                    || std::strcmp(artName, "v13secr6.frm") == 0
-                    || std::strcmp(artName, "v13secr4.frm") == 0)) {
+            auto hidden = hiddenSceneryArt.find(object->fid & 0xFFF);
+            if (hidden == hiddenSceneryArt.end()) {
+                char artName[64] = { 0 };
+                const bool helper = art_get_base_name(type, object->fid & 0xFFF, artName) == 0
+                    && (std::strcmp(artName, "block.frm") == 0
+                        || std::strcmp(artName, "v13secr6.frm") == 0
+                        || std::strcmp(artName, "v13secr4.frm") == 0);
+                hidden = hiddenSceneryArt.emplace(object->fid & 0xFFF, helper).first;
+            }
+            if (hidden->second) {
                 continue;
             }
             Proto* sceneryProto = nullptr;
@@ -2694,20 +2703,33 @@ static void first_person_render_now()
             break;
         }
 
-        int opaqueMinX = frame->width;
-        int opaqueMinY = frame->height;
-        int opaqueMaxX = -1;
-        int opaqueMaxY = -1;
-        for (int sy = 0; sy < frame->height; sy++) {
-            for (int sx = 0; sx < frame->width; sx++) {
-                if (pixels[sy * frame->width + sx] != 0) {
-                    opaqueMinX = std::min(opaqueMinX, sx);
-                    opaqueMinY = std::min(opaqueMinY, sy);
-                    opaqueMaxX = std::max(opaqueMaxX, sx);
-                    opaqueMaxY = std::max(opaqueMaxY, sy);
+        // An FRM frame's pixels never change, so its opaque bounds and GPU
+        // texture are found by (fid, frame, direction).
+        const std::uint64_t spriteKey = (1ull << 61)
+            | (static_cast<std::uint64_t>(static_cast<unsigned int>(object.fid)) << 16)
+            | (static_cast<std::uint64_t>(frameNumber & 0x1FFF) << 3)
+            | static_cast<std::uint64_t>(object.direction & 7);
+        struct OpaqueBounds { int minX; int minY; int maxX; int maxY; };
+        static std::unordered_map<std::uint64_t, OpaqueBounds> opaqueBoundsCache;
+        auto cachedBounds = opaqueBoundsCache.find(spriteKey);
+        if (cachedBounds == opaqueBoundsCache.end()) {
+            OpaqueBounds bounds { frame->width, frame->height, -1, -1 };
+            for (int sy = 0; sy < frame->height; sy++) {
+                for (int sx = 0; sx < frame->width; sx++) {
+                    if (pixels[sy * frame->width + sx] != 0) {
+                        bounds.minX = std::min(bounds.minX, sx);
+                        bounds.minY = std::min(bounds.minY, sy);
+                        bounds.maxX = std::max(bounds.maxX, sx);
+                        bounds.maxY = std::max(bounds.maxY, sy);
+                    }
                 }
             }
+            cachedBounds = opaqueBoundsCache.emplace(spriteKey, bounds).first;
         }
+        const int opaqueMinX = cachedBounds->second.minX;
+        const int opaqueMinY = cachedBounds->second.minY;
+        const int opaqueMaxX = cachedBounds->second.maxX;
+        const int opaqueMaxY = cachedBounds->second.maxY;
 
         const double worldWidth = worldHeight * frame->width / frame->height;
         const int projectedWidth = std::max(1, static_cast<int>(focal * worldWidth / object.z));
@@ -2746,7 +2768,7 @@ static void first_person_render_now()
                 gpuVertex(left + projectedWidth, bottom, object.z, 1.0, 1.0),
                 gpuVertex(left, bottom, object.z, 0.0, 1.0),
             };
-            first_person_world_gpu_quad(pixels, frame->width, frame->height, vertices, owner);
+            first_person_world_gpu_quad(pixels, frame->width, frame->height, vertices, owner, false, 128.0f, spriteKey);
             if (opaqueMaxX >= opaqueMinX && opaqueMaxY >= opaqueMinY) {
                 const double x0 = left + projectedWidth * (opaqueMinX / static_cast<double>(frame->width));
                 const double x1 = left + projectedWidth * ((opaqueMaxX + 1.0) / frame->width);
@@ -3698,6 +3720,21 @@ int first_person_sweep_map(std::FILE* out, const char* mapName, void (*progress)
                 if ((square[elevation]->field_0[i] & 0xFFF) != 1) floored++;
             }
             std::fprintf(out, "CEILING\t%s\t%d\t%d\t%d\n", mapName, elevation, enclosed, floored);
+        }
+
+        // The object pass's closed-form hex distance against native tile_dist,
+        // from the entrance and from the map centre to every object.
+        {
+            int pairs = 0;
+            int mismatches = 0;
+            for (Object* object = obj_find_first_at(elevation); object != nullptr; object = obj_find_next_at()) {
+                if (object->tile < 0 || object->tile >= kFirstPersonTileCount) continue;
+                for (int from : { startTile, 20100 }) {
+                    pairs++;
+                    mismatches += first_person_hex_distance(from, object->tile) != tile_dist(from, object->tile);
+                }
+            }
+            std::fprintf(out, "HEXDIST\t%s\t%d\t%d\t%d\n", mapName, elevation, pairs, mismatches);
         }
 
         // Sprite anchoring: native art offsets and the empty rows below each

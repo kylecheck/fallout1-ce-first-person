@@ -1453,3 +1453,27 @@ On the sweep's first seven maps the average frame went from 27.2 to 15.4 ms;
 setup fell from about 4.3 to 0.1 ms and floor and ceiling from 5-6 to about
 1.4 ms. Those times use software OpenGL, so the readback share on the Deck
 needs its own profile.
+
+### Cached object sprites and closed-form hex distance
+
+The Deck profile's largest remaining stage was objects (about 8 ms in Shady
+Sands). Each frame it measured every object's distance with native
+`tile_dist`, which walks the path a hex at a time with two `tile_coord` calls
+per step, looked up scenery art names, scanned every sprite's pixels for
+its opaque bounds and hashed them to find its texture. Now:
+
+- `first_person_hex_distance` (`first_person_hex.h`) gives the same distance
+  in closed form, as axial coordinates of the even-columns-down grid.
+  `tests/first_person_hex_test.cc` checks it against shortest paths over the
+  native neighbour table to every tile, and the sweep's
+  `HEXDIST map elevation pairs mismatches` rows against `tile_dist` itself.
+- Opaque bounds and GPU textures are keyed by (fid, frame, direction): an FRM
+  frame's pixels never change.
+- Whether scenery art is an invisible helper is cached per art id.
+
+Wall topology still uses `tile_dist`; it is wall code and was left unchanged.
+
+```sh
+g++ -O2 -std=c++17 -Wall -Wextra -Werror -Isrc tests/first_person_hex_test.cc -o /tmp/fp-hex-test
+/tmp/fp-hex-test
+```

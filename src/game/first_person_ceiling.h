@@ -2,6 +2,7 @@
 #define FALLOUT_GAME_FIRST_PERSON_CEILING_H_
 #include <algorithm>
 #include <vector>
+#include "game/first_person_hex.h"
 namespace fallout {
 // Ceilings for elevations with no roof tiles (vaults, caves). Barrier tiles
 // are what native movement stops at: walls, doors, invisible blockers and
@@ -14,8 +15,6 @@ namespace fallout {
 constexpr unsigned char kFirstPersonBarrier = 1;
 constexpr unsigned char kFirstPersonWallBarrier = 2;
 constexpr int kFirstPersonMinWallContacts = 3;
-constexpr int kFirstPersonTileGridWidth = 200;
-constexpr int kFirstPersonTileCount = 200 * 200;
 constexpr int kFirstPersonSquareGridWidth = 100;
 constexpr int kFirstPersonSquareCount = 100 * 100;
 
@@ -25,22 +24,6 @@ inline int first_person_tile_square(int tile)
         + tile % kFirstPersonTileGridWidth / 2;
 }
 
-// The hex neighbour in direction 0-5 by the native dir_tile offsets, or -1
-// off the map. Unlike tile_num_in_direction it does not stop at the map's
-// edge rows, which are where the outdoor flood starts.
-inline int first_person_hex_neighbor(int tile, int direction)
-{
-    constexpr int w = kFirstPersonTileGridWidth;
-    static const int offsets[2][6] = {
-        { -1, w - 1, w, w + 1, 1, -w },
-        { -w - 1, -1, w, 1, 1 - w, -w },
-    };
-    if (tile < 0 || tile >= kFirstPersonTileCount || direction < 0 || direction >= 6) return -1;
-    const int next = tile + offsets[(tile % w) & 1][direction];
-    if (next < 0 || next >= kFirstPersonTileCount) return -1;
-    const int columnStep = next % w - tile % w;
-    return columnStep >= -1 && columnStep <= 1 ? next : -1;
-}
 
 // neighbor(tile, direction) returns the adjacent tile in hex direction 0-5,
 // or -1 off the map.
