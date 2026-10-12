@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <unordered_map>
 #include <vector>
 namespace fallout {
 namespace {
@@ -127,6 +128,9 @@ static GLuint program = 0, vao = 0, vbo = 0, fbo = 0;
 static GLuint targets[4] {};
 static int frameWidth = 0, frameHeight = 0;
 static std::vector<Texture> textures;
+// Lookup for textures: by content hash, or by a caller's stable key that
+// stands for the content (the high bit set keeps the two spaces apart).
+static std::unordered_map<std::uint64_t,GLuint> textureIndex;
 static std::vector<Proxy> proxies;
 static GLint sizeUniform = -1, ownerUniform = -1, farUniform = -1;
 constexpr float nearZ = 0.45f, farZ = 128.0f;
@@ -205,17 +209,24 @@ static bool resize(int w, int h) {
     if(pCheckFramebufferStatus(GL_FRAMEBUFFER)!=GL_FRAMEBUFFER_COMPLETE) return false;
     frameWidth=w; frameHeight=h; return true;
 }
-static GLuint texture(const unsigned char* pixels,int w,int h) {
-    std::uint64_t hash=1469598103934665603ull;
-    for(int i=0;i<w*h;i++) hash=(hash^pixels[i])*1099511628211ull;
-    for(const auto& t:textures) if(t.hash==hash && t.width==w && t.height==h) return t.name;
+static GLuint texture(const unsigned char* pixels,int w,int h,std::uint64_t key=0) {
+    std::uint64_t hash;
+    if(key!=0) {
+        hash=key|0x8000000000000000ull;
+    } else {
+        hash=1469598103934665603ull;
+        for(int i=0;i<w*h;i++) hash=(hash^pixels[i])*1099511628211ull;
+        hash=(hash^static_cast<std::uint64_t>(w)*31^static_cast<std::uint64_t>(h))&0x7FFFFFFFFFFFFFFFull;
+    }
+    auto found=textureIndex.find(hash);
+    if(found!=textureIndex.end()) return found->second;
     GLuint name=0; pGenTextures(1,&name); pBindTexture(GL_TEXTURE_2D,name);
     pTexImage2D(GL_TEXTURE_2D,0,GL_R8,w,h,0,GL_RED,GL_UNSIGNED_BYTE,pixels);
     pTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_NEAREST);
     pTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_NEAREST);
     pTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_CLAMP_TO_EDGE);
     pTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,GL_CLAMP_TO_EDGE);
-    textures.push_back({hash,w,h,name}); return name;
+    textures.push_back({hash,w,h,name}); textureIndex.emplace(hash,name); return name;
 }
 static void draw(GLuint tex,const FirstPersonGpuVertex* v,std::uint32_t owner) {
     const FirstPersonGpuVertex triangles[6]={v[0],v[1],v[2],v[0],v[2],v[3]};
@@ -232,7 +243,7 @@ bool first_person_world_gpu_begin(int w,int h,int horizon,unsigned char sky,unsi
     if(!resize(w,h)) { failed=true; restore(); return false; }
     // Bounded art cache. Indexed textures remain correct under native palette fades.
     if(textures.size()>2048) { for(auto& t:textures) { pDeleteTextures(1,&t.name); }
-        textures.clear(); }
+        textures.clear(); textureIndex.clear(); }
     proxies.clear(); pBindFramebuffer(GL_FRAMEBUFFER,fbo);
     const GLenum outputs[3]={GL_COLOR_ATTACHMENT0,GL_COLOR_ATTACHMENT1,GL_COLOR_ATTACHMENT2};
     pDrawBuffers(3,outputs); pViewport(0,0,w,h); pDisable(GL_BLEND); pDisable(GL_CULL_FACE);
@@ -247,9 +258,9 @@ bool first_person_world_gpu_begin(int w,int h,int horizon,unsigned char sky,unsi
     pBindVertexArray(vao); pBindBuffer(GL_ARRAY_BUFFER,vbo); return true;
 }
 void first_person_world_gpu_quad(const unsigned char* pixels,int w,int h,
-    const FirstPersonGpuVertex* vertices,std::uint32_t owner,bool proxy,float farLimit) {
+    const FirstPersonGpuVertex* vertices,std::uint32_t owner,bool proxy,float farLimit,std::uint64_t textureKey) {
     if(proxy) { Proxy p {}; std::copy(vertices,vertices+4,p.vertices.begin()); p.owner=owner; proxies.push_back(p); return; }
-    if(pixels && w>0 && h>0) { pUniform1f(farUniform,farLimit); draw(texture(pixels,w,h),vertices,owner); }
+    if(pixels && w>0 && h>0) { pUniform1f(farUniform,farLimit); draw(texture(pixels,w,h,textureKey),vertices,owner); }
 }
 bool first_person_world_gpu_finish(unsigned char* indexed) {
     const GLenum outputs[3]={GL_NONE,GL_NONE,GL_COLOR_ATTACHMENT2}; pDrawBuffers(3,outputs);
@@ -292,7 +303,7 @@ void first_person_world_gpu_shutdown() {
         SDL_Window* savedWindow=SDL_GL_GetCurrentWindow(); SDL_GLContext saved=SDL_GL_GetCurrentContext();
         SDL_GL_MakeCurrent(window,context);
         for(auto& t:textures) { pDeleteTextures(1,&t.name); }
-        textures.clear();
+        textures.clear(); textureIndex.clear();
         pDeleteTextures(4,targets); if(fbo)pDeleteFramebuffers(1,&fbo);
         if(vbo)pDeleteBuffers(1,&vbo);
         if(vao)pDeleteVertexArrays(1,&vao);

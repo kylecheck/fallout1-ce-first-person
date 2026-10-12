@@ -7,8 +7,11 @@ namespace fallout {
 struct FirstPersonGpuVertex { float x, y, z, u, v; };
 bool first_person_world_gpu_begin(int width, int height, int horizon,
     unsigned char sky, unsigned char ground);
+// textureKey, when non-zero, stands for the pixels' content (the same key must
+// always mean the same pixels) and skips hashing them to find the texture.
 void first_person_world_gpu_quad(const unsigned char* pixels, int width, int height,
-    const FirstPersonGpuVertex* vertices, std::uint32_t owner, bool proxy = false, float farLimit = 128.0f);
+    const FirstPersonGpuVertex* vertices, std::uint32_t owner, bool proxy = false, float farLimit = 128.0f,
+    std::uint64_t textureKey = 0);
 bool first_person_world_gpu_read(unsigned char* indexed, float* depth,
     std::uint32_t* owners, std::uint32_t* proxies);
 // Partial readback: finish draws the proxies and reads the full indexed colour

@@ -1440,3 +1440,16 @@ with a full readback for coverage, and counts pixels inside the windowed
 frame's windows whose picks differ (`pickWindows pickMismatches`). All frames
 must report 0 mismatches.
 
+### Cached floor geometry and keyed textures
+
+Every GPU quad found its texture by hashing all of its pixels and searching up
+to 2048 textures in order. Textures are now found through a hash table, and a
+caller may pass a stable `textureKey` that stands for the pixels so they are not
+hashed at all. The floor and ceiling pass keeps each map elevation's squares
+(isometric position relative to square 0, which scrolling does not change, plus
+floor and ceiling art) and the masked, optionally darkened faces by art across
+frames, and keys their textures by art. Per frame it only culls and projects.
+On the sweep's first seven maps the average frame went from 27.2 to 15.4 ms;
+setup fell from about 4.3 to 0.1 ms and floor and ceiling from 5-6 to about
+1.4 ms. Those times use software OpenGL, so the readback share on the Deck
+needs its own profile.

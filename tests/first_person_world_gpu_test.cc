@@ -60,6 +60,22 @@ int main(){
     assert(!first_person_world_gpu_read_region(60,60,8,8,nullptr,only.data(),nullptr)); // Outside the frame.
     first_person_world_gpu_end();
     assert(SDL_GL_GetCurrentContext()==saved);
+    // Keyed textures: a key stands for its first pixels; unkeyed quads with the
+    // same pixels still find their own texture by content.
+    {
+        assert(first_person_world_gpu_begin(64,64,32,3,4));
+        unsigned char a=51,b=52;
+        FirstPersonGpuVertex v[4]={{8*2.f,8*2.f,2,0,0},{24*2.f,8*2.f,2,1,0},{24*2.f,24*2.f,2,1,1},{8*2.f,24*2.f,2,0,1}};
+        first_person_world_gpu_quad(&a,1,1,v,61,false,128.0f,0x77);
+        FirstPersonGpuVertex w[4]={{40*2.f,8*2.f,2,0,0},{56*2.f,8*2.f,2,1,0},{56*2.f,24*2.f,2,1,1},{40*2.f,24*2.f,2,0,1}};
+        first_person_world_gpu_quad(&b,1,1,w,62,false,128.0f,0x77); // Same key: a's texture.
+        FirstPersonGpuVertex u[4]={{8*2.f,40*2.f,2,0,0},{24*2.f,40*2.f,2,1,0},{24*2.f,56*2.f,2,1,1},{8*2.f,56*2.f,2,0,1}};
+        first_person_world_gpu_quad(&b,1,1,u,63);
+        std::vector<unsigned char> k(4096);
+        assert(first_person_world_gpu_finish(k.data()));
+        first_person_world_gpu_end();
+        assert(k[at(16,16)]==51 && k[at(48,16)]==51 && k[at(16,48)]==52);
+    }
     // Resize and near-plane clipping: crossing vertices must not drop a face.
     assert(first_person_world_gpu_begin(32,32,16,3,4));
     FirstPersonGpuVertex crossing[4]={{-1,-1,0.2f,0,0},{40,8,2,1,0},
@@ -78,5 +94,5 @@ int main(){
     SDL_GL_DeleteContext(saved);
     SDL_DestroyWindow(presentation);
     SDL_Quit();
-    std::puts("GPU indexed color, depth, transparency, occluded pick and partial readback tests passed");
+    std::puts("GPU indexed color, depth, transparency, occluded pick, partial readback and keyed texture tests passed");
 }

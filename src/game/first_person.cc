@@ -18,6 +18,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -1382,66 +1383,96 @@ static void first_person_render_now()
     // The game is already palette/pixel-art based, so this is a useful speed
     // bridge without changing the authoritative projection or world mapping.
     if (gpuWorld) {
-        struct FloorFace { int fid; bool dark; int width; int height; std::vector<unsigned char> pixels; };
-        std::vector<FloorFace> floorFaces;
-        for (int tile = 0; tile < SQUARE_GRID_SIZE; tile++) {
-            int ix = 0, iy = 0;
-            if (square_coord(tile, &ix, &iy, map_elevation) != 0) continue;
+        // Masked floor faces by art and darkening. The mask is the native
+        // square pattern, the same for every square, so faces persist and their
+        // textures are found by key instead of by hashing their pixels.
+        struct FloorFace { int width; int height; std::vector<unsigned char> pixels; };
+        static std::unordered_map<std::uint64_t, FloorFace> floorFaces;
+        // The current map elevation's squares: isometric position relative to
+        // square 0 (independent of scrolling) and their floor and ceiling art.
+        struct FloorSquare { int square; int relX; int relY; int floorFid; int ceilingFid; bool darkCeiling; };
+        static std::vector<FloorSquare> floorSquares;
+        static char floorMap[sizeof(map_data.name)] = {};
+        static int floorElevation = -1;
+        int baseX = 0;
+        int baseY = 0;
+        square_coord(0, &baseX, &baseY, map_elevation);
+        if (floorElevation != map_elevation || std::strncmp(floorMap, map_data.name, sizeof(floorMap)) != 0) {
+            std::memcpy(floorMap, map_data.name, sizeof(floorMap));
+            floorElevation = map_elevation;
+            floorSquares.clear();
+            for (int tile = 0; tile < SQUARE_GRID_SIZE; tile++) {
+                int ix = 0, iy = 0;
+                if (square_coord(tile, &ix, &iy, map_elevation) != 0) continue;
+                const int squareData = square[map_elevation]->field_0[tile];
+                const int floorFid = art_id(OBJ_TYPE_TILE, squareData & 0xFFF, 0, 0, 0);
+                int ceilingFid = roofFid(squareData);
+                bool darkCeiling = false;
+                if (ceilingFid == -1 && enclosedCeiling[tile]) {
+                    ceilingFid = floorFid;
+                    darkCeiling = true;
+                }
+                floorSquares.push_back({ tile, ix - baseX, iy - baseY, floorFid, ceilingFid, darkCeiling });
+            }
+        }
+        auto faceFor = [&](int fid, bool dark, int squareTile, int ix, int iy) -> const FloorFace* {
+            const std::uint64_t key = (static_cast<std::uint64_t>(static_cast<unsigned int>(fid)) << 1) | (dark ? 1u : 0u);
+            auto found = floorFaces.find(key);
+            if (found != floorFaces.end()) return found->second.width > 0 ? &found->second : nullptr;
+            FloorFace masked { 0, 0, {} };
+            if (FirstPersonFloorArt* art = getFloorArt(fid)) {
+                masked.width = art->frame->width;
+                masked.height = art->frame->height;
+                masked.pixels.assign(art->pixels, art->pixels + masked.width * masked.height);
+                // Match native square ownership rather than drawing overlapping
+                // rectangular floor FRMs as competing pieces of geometry.
+                for (int y = 0; y < masked.height; y++) {
+                    for (int x = 0; x < masked.width; x++) {
+                        unsigned char& pixel = masked.pixels[y * masked.width + x];
+                        if (square_num(ix + x, iy + y, map_elevation) != squareTile) {
+                            pixel = 0;
+                        } else if (dark && pixel != 0) {
+                            pixel = darken(pixel);
+                        }
+                    }
+                }
+            }
+            const FloorFace& face = floorFaces.emplace(key, std::move(masked)).first->second;
+            return face.width > 0 ? &face : nullptr;
+        };
+        constexpr double kDeterminant = kIsoXFromWorldX * 12.0 - 16.0 * kIsoYFromWorldX;
+        for (const FloorSquare& floorSquare : floorSquares) {
+            const int ix = baseX + floorSquare.relX;
+            const int iy = baseY + floorSquare.relY;
             // Cull before touching art. A floor FRM occupies about 3 world units.
             const double isoDx = ix - playerIsoX, isoDy = iy - playerIsoY;
-            const double dx = (12.0 * isoDx - 16.0 * isoDy) / (kIsoXFromWorldX * 12.0 - 16.0 * kIsoYFromWorldX);
-            const double dy = (-kIsoYFromWorldX * isoDx + kIsoXFromWorldX * isoDy) / (kIsoXFromWorldX * 12.0 - 16.0 * kIsoYFromWorldX);
+            const double dx = (12.0 * isoDx - 16.0 * isoDy) / kDeterminant;
+            const double dy = (-kIsoYFromWorldX * isoDx + kIsoXFromWorldX * isoDy) / kDeterminant;
             const double z = dx * forwardX + dy * forwardY;
             if (z < -4.0 || z > kFarPlane + 4.0 || std::hypot(dx, dy) > kFarPlane + 4.0) continue;
-            const int squareData = square[map_elevation]->field_0[tile];
-            const int floorFid = art_id(OBJ_TYPE_TILE, squareData & 0xFFF, 0, 0, 0);
-            int ceilingFid = roofFid(squareData);
-            bool darkCeiling = false;
-            if (ceilingFid == -1 && enclosedCeiling[tile]) {
-                ceilingFid = floorFid;
-                darkCeiling = true;
-            }
             for (int layer = 0; layer < 2; layer++) {
-                const int fid = layer == 0 ? floorFid : ceilingFid;
-                const bool dark = layer == 1 && darkCeiling;
+                const int fid = layer == 0 ? floorSquare.floorFid : floorSquare.ceilingFid;
+                const bool dark = layer == 1 && floorSquare.darkCeiling;
                 if (fid == -1) continue;
+                const FloorFace* face = faceFor(fid, dark, floorSquare.square, ix, iy);
+                if (face == nullptr) continue;
                 const double planeHeight = layer == 0 ? kEyeHeight : kEyeHeight - kCeilingHeight;
-                FirstPersonFloorArt* art = getFloorArt(fid);
-                if (!art) continue;
-                const double sx[4] = { 0.0, static_cast<double>(art->frame->width), static_cast<double>(art->frame->width), 0.0 };
-                const double sy[4] = { 0.0, 0.0, static_cast<double>(art->frame->height), static_cast<double>(art->frame->height) };
+                const double sx[4] = { 0.0, static_cast<double>(face->width), static_cast<double>(face->width), 0.0 };
+                const double sy[4] = { 0.0, 0.0, static_cast<double>(face->height), static_cast<double>(face->height) };
                 FirstPersonGpuVertex vertices[4];
                 for (int i = 0; i < 4; i++) {
                     const double a = isoDx + sx[i], b = isoDy + sy[i];
-                    const double wx = (12.0 * a - 16.0 * b) / (kIsoXFromWorldX * 12.0 - 16.0 * kIsoYFromWorldX);
-                    const double wy = (-kIsoYFromWorldX * a + kIsoXFromWorldX * b) / (kIsoXFromWorldX * 12.0 - 16.0 * kIsoYFromWorldX);
+                    const double wx = (12.0 * a - 16.0 * b) / kDeterminant;
+                    const double wy = (-kIsoYFromWorldX * a + kIsoXFromWorldX * b) / kDeterminant;
                     const double cx = wx * rightX + wy * rightY, cz = wx * forwardX + wy * forwardY;
                     vertices[i] = { static_cast<float>(width * 0.5 * cz + focal * cx),
                         static_cast<float>(horizon * cz + focal * planeHeight), static_cast<float>(cz),
                         (i == 1 || i == 2) ? 1.0f : 0.0f, (i >= 2) ? 1.0f : 0.0f };
                 }
-                // Match native square ownership rather than drawing overlapping
-                // rectangular floor FRMs as competing pieces of geometry.
-                FloorFace* face = nullptr;
-                for (auto& cached : floorFaces) {
-                    if (cached.fid == fid && cached.dark == dark) { face = &cached; break; }
-                }
-                if (!face) {
-                    FloorFace masked { fid, dark, art->frame->width, art->frame->height, {} };
-                    masked.pixels.assign(art->pixels, art->pixels + masked.width * masked.height);
-                    for (int y = 0; y < masked.height; y++) {
-                        for (int x = 0; x < masked.width; x++) {
-                            unsigned char& pixel = masked.pixels[y * masked.width + x];
-                            if (square_num(ix + x, iy + y, map_elevation) != tile) {
-                                pixel = 0;
-                            } else if (dark && pixel != 0) {
-                                pixel = darken(pixel);
-                            }
-                        }
-                    }
-                    floorFaces.push_back(std::move(masked)); face = &floorFaces.back();
-                }
-                first_person_world_gpu_quad(face->pixels.data(), face->width, face->height, vertices, 0, false, static_cast<float>(kFarPlane));
+                const std::uint64_t textureKey = 0x100000000000ull
+                    | (static_cast<std::uint64_t>(static_cast<unsigned int>(fid)) << 1) | (dark ? 1u : 0u);
+                first_person_world_gpu_quad(face->pixels.data(), face->width, face->height, vertices, 0, false,
+                    static_cast<float>(kFarPlane), textureKey);
             }
         }
     }
