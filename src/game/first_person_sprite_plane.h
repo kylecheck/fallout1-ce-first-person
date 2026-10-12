@@ -358,6 +358,49 @@ inline std::vector<FirstPersonSpriteFace> first_person_sprite_box_faces(const Fi
     return faces;
 }
 
+// The wall axis a frame's top edge runs along: the tops of its opaque
+// columns follow one wall slope within 2 px (ignoring the worst tenth), over
+// at least 12 columns. Door panels have notched or uneven bottoms, so only
+// the top is judged.
+inline FirstPersonSpriteWallAxis first_person_sprite_top_axis(const unsigned char* pixels, int width, int height)
+{
+    if (pixels == nullptr || width < 12 || height <= 0) return FIRST_PERSON_SPRITE_AXIS_NONE;
+    std::vector<double> xs;
+    std::vector<double> tops;
+    for (int x = 0; x < width; x++) {
+        for (int y = 0; y < height; y++) {
+            if (pixels[y * width + x] != 0) {
+                xs.push_back(x);
+                tops.push_back(y);
+                break;
+            }
+        }
+    }
+    if (xs.size() < 12) return FIRST_PERSON_SPRITE_AXIS_NONE;
+    FirstPersonSpriteWallAxis best = FIRST_PERSON_SPRITE_AXIS_NONE;
+    double bestError = 2.0;
+    for (FirstPersonSpriteWallAxis axis : { FIRST_PERSON_SPRITE_AXIS_NORTH_SOUTH, FIRST_PERSON_SPRITE_AXIS_EAST_WEST }) {
+        const double slope = first_person_sprite_axis_slope(axis);
+        std::vector<double> offsets(xs.size());
+        for (size_t i = 0; i < xs.size(); i++) offsets[i] = tops[i] - slope * xs[i];
+        std::vector<double> sorted = offsets;
+        std::nth_element(sorted.begin(), sorted.begin() + sorted.size() / 2, sorted.end());
+        const double offset = sorted[sorted.size() / 2];
+        std::vector<double> squares(xs.size());
+        for (size_t i = 0; i < xs.size(); i++) squares[i] = (offsets[i] - offset) * (offsets[i] - offset);
+        std::sort(squares.begin(), squares.end());
+        const size_t kept = xs.size() - xs.size() / 10;
+        double sum = 0.0;
+        for (size_t i = 0; i < kept; i++) sum += squares[i];
+        const double error = std::sqrt(sum / static_cast<double>(kept));
+        if (error <= bestError) {
+            bestError = error;
+            best = axis;
+        }
+    }
+    return best;
+}
+
 // A wall-painted frame on the vertical plane along axis through (lineX, lineY).
 // Columns keep their place along the wall and each pixel's height comes from
 // the isometric rise between the wall line and the pixel, as for wall art.

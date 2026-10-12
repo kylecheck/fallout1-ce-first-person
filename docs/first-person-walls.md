@@ -1543,6 +1543,16 @@ Leak measures on the test maps are unchanged (Vault 13 e0 sky 2.98 to 3.04%).
 `FALLOUT_FP_SWEEP_OPEN_DOORS=1` shows every door on its open frame in the
 sweep.
 
+Door orientation: many door protos carry a corner orientation (the Vault 13
+doors `v13doorf`/`vdoorf` and the gear door `v13secur` are flagged West
+corner), which bent their panels into a V. A corner-flagged door whose closed
+art's top edge follows one wall slope (`first_person_sprite_top_axis`: within
+2 px over the best nine tenths of its columns; the notched bottoms defeat the
+full band test) is drawn as a straight panel on that axis. The gear door uses
+the same 151x142 arch art as the `v13secr6` doorway and now goes through that
+profile, showing its live frame five columns wide: open, the gear has rolled
+aside and the arch stays, where sliding the closed frame away removed both.
+
 ### Interior ceilings
 
 On elevations without roof tiles, when the walkable area does not come within

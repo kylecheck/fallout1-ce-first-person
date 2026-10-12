@@ -2023,18 +2023,63 @@ static void first_person_render_now()
             && proto->scenery.type == SCENERY_TYPE_DOOR) {
             doorTiles.push_back(object->tile);
 
+            // The vault gear door is the doorway arch above with a gear in
+            // it: the same profile shows its live frame, so it opens as the
+            // native animation does (the gear rolls aside, the arch stays).
+            if (std::strcmp(sceneryArt, "v13secur.frm") == 0) {
+                if ((object->flags & OBJECT_HIDDEN) == 0
+                    && first_person_hex_distance(obj_dude->tile, object->tile) <= kRenderRadius) {
+                    double worldX;
+                    double worldY;
+                    tileToWorld(object->tile, &worldX, &worldY);
+                    doors.push_back({ object, object->fid, object->frame,
+                        ((object->rotation % ROTATION_COUNT) + ROTATION_COUNT) % ROTATION_COUNT,
+                        object->tile, 0x08000000u, worldX, worldY, true, false });
+                }
+                continue;
+            }
+
             if ((object->flags & OBJECT_HIDDEN) == 0
                 && first_person_hex_distance(obj_dude->tile, object->tile) <= kRenderRadius) {
                 double doorWorldX;
                 double doorWorldY;
                 tileToWorld(object->tile, &doorWorldX, &doorWorldY);
+                const int doorDirection = ((object->rotation % ROTATION_COUNT) + ROTATION_COUNT) % ROTATION_COUNT;
+                unsigned int doorFlags = static_cast<unsigned int>(proto->scenery.extendedFlags);
+                // Many door protos carry a corner orientation, which would
+                // bend the panel in two. A door whose closed art's top edge
+                // runs straight along one wall slope is a straight panel.
+                if (first_person_wall_is_corner(first_person_wall_kind(doorFlags))) {
+                    static std::unordered_map<std::uint64_t, FirstPersonSpriteWallAxis> doorArtAxis;
+                    const std::uint64_t key = (static_cast<std::uint64_t>(static_cast<unsigned int>(object->fid)) << 3)
+                        | static_cast<std::uint64_t>(doorDirection & 7);
+                    auto axis = doorArtAxis.find(key);
+                    if (axis == doorArtAxis.end()) {
+                        FirstPersonSpriteWallAxis found = FIRST_PERSON_SPRITE_AXIS_NONE;
+                        CacheEntry* doorEntry = nullptr;
+                        if (Art* doorArt = art_ptr_lock(object->fid, &doorEntry)) {
+                            ArtFrame* closed = frame_ptr(doorArt, 0, doorDirection);
+                            unsigned char* closedPixels = art_frame_data(doorArt, 0, doorDirection);
+                            if (closed != nullptr && closedPixels != nullptr) {
+                                found = first_person_sprite_top_axis(closedPixels, closed->width, closed->height);
+                            }
+                            art_ptr_unlock(doorEntry);
+                        }
+                        axis = doorArtAxis.emplace(key, found).first;
+                    }
+                    if (axis->second == FIRST_PERSON_SPRITE_AXIS_EAST_WEST) {
+                        doorFlags = (doorFlags & ~0xF8000000u) | 0x08000000u;
+                    } else if (axis->second == FIRST_PERSON_SPRITE_AXIS_NORTH_SOUTH) {
+                        doorFlags &= ~0xF8000000u;
+                    }
+                }
                 doors.push_back({
                     object,
                     object->fid,
                     object->frame,
-                    ((object->rotation % ROTATION_COUNT) + ROTATION_COUNT) % ROTATION_COUNT,
+                    doorDirection,
                     object->tile,
-                    static_cast<unsigned int>(proto->scenery.extendedFlags),
+                    doorFlags,
                     doorWorldX,
                     doorWorldY,
                 });

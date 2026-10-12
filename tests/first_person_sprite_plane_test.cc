@@ -103,6 +103,25 @@ int main()
         assert(first_person_sprite_wall_axis(nullptr, 4, 8) == FIRST_PERSON_SPRITE_AXIS_NONE);
     }
 
+    // Top-edge axis: judged on the top alone, so a notched bottom is fine.
+    {
+        const double ew = first_person_sprite_axis_slope(FIRST_PERSON_SPRITE_AXIS_EAST_WEST);
+        const double ns = first_person_sprite_axis_slope(FIRST_PERSON_SPRITE_AXIS_NORTH_SOUTH);
+        std::vector<unsigned char> door = band(52, 79, ew, 14.0, 60);
+        for (int y = 60; y < 79; y++) {
+            for (int x = 0; x < 8; x++) door[y * 52 + x] = 0;
+        }
+        assert(first_person_sprite_top_axis(door.data(), 52, 79) == FIRST_PERSON_SPRITE_AXIS_EAST_WEST);
+        std::vector<unsigned char> side = band(30, 84, ns, 0.0, 60);
+        assert(first_person_sprite_top_axis(side.data(), 30, 84) == FIRST_PERSON_SPRITE_AXIS_NORTH_SOUTH);
+        std::vector<unsigned char> dome(40 * 40, 0);
+        for (int x = 0; x < 40; x++) {
+            const int top = static_cast<int>(std::abs(x - 20) * std::abs(x - 20) / 12);
+            for (int y = top; y < 40; y++) dome[y * 40 + x] = 2;
+        }
+        assert(first_person_sprite_top_axis(dome.data(), 40, 40) == FIRST_PERSON_SPRITE_AXIS_NONE);
+    }
+
     // A wall quad: a pixel on the wall line's isometric image at floor level
     // gets height 0; a pixel 60 px above it is one unit up; corners stay on
     // the wall line.
