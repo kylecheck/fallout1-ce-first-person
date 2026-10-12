@@ -15,6 +15,7 @@
 #include "game/first_person_profile.h"
 #include "game/first_person_reach.h"
 #include "game/first_person_seal.h"
+#include "game/first_person_sprite_plane.h"
 
 #include <algorithm>
 #include <cmath>
@@ -3068,11 +3069,12 @@ static void first_person_render_now()
             | (static_cast<std::uint64_t>(static_cast<unsigned int>(object.fid)) << 16)
             | (static_cast<std::uint64_t>(frameNumber & 0x1FFF) << 3)
             | static_cast<std::uint64_t>(object.direction & 7);
-        struct OpaqueBounds { int minX; int minY; int maxX; int maxY; };
+        struct OpaqueBounds { int minX; int minY; int maxX; int maxY; FirstPersonSpriteWallAxis wallAxis; };
         static std::unordered_map<std::uint64_t, OpaqueBounds> opaqueBoundsCache;
         auto cachedBounds = opaqueBoundsCache.find(spriteKey);
         if (cachedBounds == opaqueBoundsCache.end()) {
-            OpaqueBounds bounds { frame->width, frame->height, -1, -1 };
+            OpaqueBounds bounds { frame->width, frame->height, -1, -1,
+                first_person_sprite_wall_axis(pixels, frame->width, frame->height) };
             for (int sy = 0; sy < frame->height; sy++) {
                 for (int sx = 0; sx < frame->width; sx++) {
                     if (pixels[sy * frame->width + sx] != 0) {
@@ -3091,6 +3093,191 @@ static void first_person_render_now()
         const int opaqueMaxY = cachedBounds->second.maxY;
 
         const double worldWidth = worldHeight * frame->width / frame->height;
+
+        // Scenery and items keep their art but not the camera-facing card:
+        // native flat objects lie on the floor, art painted along a wall goes
+        // on that wall, the rest turns toward the viewer and leans back by the
+        // isometric angle it was drawn at. Critters stay camera-facing.
+        static const bool legacySprites = std::getenv("FALLOUT_FP_SPRITES_LEGACY") != nullptr;
+        if (!legacySprites && (object.type == OBJ_TYPE_SCENERY || object.type == OBJ_TYPE_ITEM)) {
+            Object* const native = object.object;
+            double hexX;
+            double hexY;
+            tileToWorld(native->tile, &hexX, &hexY);
+            const int offsetX = art->xOffsets[object.direction] + native->x;
+            const int offsetY = art->yOffsets[object.direction] + native->y;
+            FirstPersonSpriteQuad quad;
+            bool placed = false;
+            if ((native->flags & OBJECT_FLAT) != 0) {
+                quad = first_person_sprite_floor_quad(hexX, hexY, frame->width, frame->height,
+                    offsetX, offsetY, 0.01);
+                placed = true;
+            } else if (cachedBounds->second.wallAxis != FIRST_PERSON_SPRITE_AXIS_NONE) {
+                // The nearest drawn wall segment along the art's axis, within
+                // about a hex of the object; the art sits just in front of it,
+                // on the side the native camera sees.
+                const FirstPersonSpriteWallAxis axis = cachedBounds->second.wallAxis;
+                const bool northSouth = axis == FIRST_PERSON_SPRITE_AXIS_NORTH_SOUTH;
+                double bestDistance = 1.2;
+                double lineX = 0.0;
+                double lineY = 0.0;
+                for (const FirstPersonWallSprite& wall : walls) {
+                    if (first_person_hex_distance(wall.tile, native->tile) > 2) continue;
+                    for (const FirstPersonWallSegment& segment : first_person_wall_segments(
+                             wall.tile, wall.extendedFlags, wall.direction, wall.worldX, wall.worldY)) {
+                        const bool parallel = northSouth
+                            ? std::abs(segment.ax - segment.bx) < 1.0e-6
+                            : std::abs(segment.ay - segment.by) < 1.0e-6;
+                        if (!parallel) continue;
+                        const double distance = northSouth ? std::abs(segment.ax - hexX) : std::abs(segment.ay - hexY);
+                        const double along = northSouth ? hexY : hexX;
+                        const double from = northSouth ? std::min(segment.ay, segment.by) : std::min(segment.ax, segment.bx);
+                        const double to = northSouth ? std::max(segment.ay, segment.by) : std::max(segment.ax, segment.bx);
+                        if (along < from - 1.0 || along > to + 1.0 || distance >= bestDistance) continue;
+                        bestDistance = distance;
+                        lineX = northSouth ? segment.ax - 0.04 : hexX;
+                        lineY = northSouth ? hexY : segment.ay + 0.04;
+                        placed = true;
+                    }
+                }
+                if (placed) {
+                    quad = first_person_sprite_wall_quad(hexX, hexY, axis, lineX, lineY,
+                        frame->width, frame->height, offsetX, offsetY);
+                }
+            }
+            if (!placed) {
+                const double drop = object.type == OBJ_TYPE_ITEM && opaqueMaxY >= 0
+                    ? static_cast<double>(frame->height - 1 - opaqueMaxY) / frame->height
+                    : 0.0;
+                quad = first_person_sprite_leaning_quad(hexX, hexY, playerWorldX, playerWorldY,
+                    worldWidth, worldHeight, drop, kFirstPersonIsoLean, 0.35);
+            }
+
+            // Camera space: x right, y up from the eye, z forward.
+            double corners[4][3];
+            bool behind = false;
+            bool anyInFront = false;
+            double minZ = 1.0e30;
+            int boxLeft = width;
+            int boxTop = height;
+            int boxRight = -1;
+            int boxBottom = -1;
+            for (int corner = 0; corner < 4; corner++) {
+                const double cdx = quad.x[corner] - playerWorldX;
+                const double cdy = quad.y[corner] - playerWorldY;
+                corners[corner][0] = cdx * rightX + cdy * rightY;
+                corners[corner][1] = quad.h[corner] - kEyeHeight;
+                corners[corner][2] = cdx * forwardX + cdy * forwardY;
+                minZ = std::min(minZ, corners[corner][2]);
+                if (corners[corner][2] < kNearPlane) {
+                    behind = true;
+                    continue;
+                }
+                anyInFront = true;
+                const double sx = width / 2.0 + corners[corner][0] * focal / corners[corner][2];
+                const double sy = horizon - corners[corner][1] * focal / corners[corner][2];
+                boxLeft = std::min(boxLeft, static_cast<int>(std::floor(sx)));
+                boxRight = std::max(boxRight, static_cast<int>(std::ceil(sx)));
+                boxTop = std::min(boxTop, static_cast<int>(std::floor(sy)));
+                boxBottom = std::max(boxBottom, static_cast<int>(std::ceil(sy)));
+            }
+            if (!anyInFront || minZ > kFarPlane) {
+                art_ptr_unlock(cacheEntry);
+                continue;
+            }
+            if (behind) {
+                // Part of it is behind the near plane: its screen extent is
+                // unbounded, so search the whole view.
+                boxLeft = 0;
+                boxTop = 0;
+                boxRight = width - 1;
+                boxBottom = height - 1;
+            }
+            boxLeft = std::max(0, boxLeft);
+            boxTop = std::max(0, boxTop);
+            boxRight = std::min(width - 1, boxRight);
+            boxBottom = std::min(height - 1, boxBottom);
+            if (boxLeft > boxRight || boxTop > boxBottom) {
+                art_ptr_unlock(cacheEntry);
+                continue;
+            }
+            renderedObjectBounds.push_back({ native, native->id, boxLeft, boxTop, boxRight, boxBottom });
+
+            if (gpuWorld) {
+                // Screen-pixel numerators: the GPU clips at the near plane.
+                auto quadVertex = [&](const double* c, double u, double v) {
+                    return FirstPersonGpuVertex { static_cast<float>(width / 2.0 * c[2] + c[0] * focal),
+                        static_cast<float>(horizon * c[2] - focal * c[1]), static_cast<float>(c[2]),
+                        static_cast<float>(u), static_cast<float>(v) };
+                };
+                auto pointVertex = [&](double u, double v) {
+                    double px;
+                    double py;
+                    double ph;
+                    first_person_sprite_quad_point(quad, u, v, &px, &py, &ph);
+                    const double cdx = px - playerWorldX;
+                    const double cdy = py - playerWorldY;
+                    const double c[3] = { cdx * rightX + cdy * rightY, ph - kEyeHeight, cdx * forwardX + cdy * forwardY };
+                    return quadVertex(c, u, v);
+                };
+                const std::uint32_t owner = gpuOwner(native);
+                const FirstPersonGpuVertex vertices[4] = {
+                    quadVertex(corners[0], 0.0, 0.0),
+                    quadVertex(corners[1], 1.0, 0.0),
+                    quadVertex(corners[2], 1.0, 1.0),
+                    quadVertex(corners[3], 0.0, 1.0),
+                };
+                first_person_world_gpu_quad(pixels, frame->width, frame->height, vertices, owner, false, 128.0f, spriteKey);
+                if (opaqueMaxX >= opaqueMinX && opaqueMaxY >= opaqueMinY) {
+                    const double u0 = opaqueMinX / static_cast<double>(frame->width);
+                    const double u1 = (opaqueMaxX + 1.0) / frame->width;
+                    const double v0 = opaqueMinY / static_cast<double>(frame->height);
+                    const double v1 = (opaqueMaxY + 1.0) / frame->height;
+                    const FirstPersonGpuVertex proxy[4] = {
+                        pointVertex(u0, v0), pointVertex(u1, v0), pointVertex(u1, v1), pointVertex(u0, v1),
+                    };
+                    first_person_world_gpu_quad(nullptr, 0, 0, proxy, owner, true);
+                }
+                art_ptr_unlock(cacheEntry);
+                continue;
+            }
+
+            const double edgeU[3] = { corners[1][0] - corners[0][0], corners[1][1] - corners[0][1],
+                corners[1][2] - corners[0][2] };
+            const double edgeV[3] = { corners[3][0] - corners[0][0], corners[3][1] - corners[0][1],
+                corners[3][2] - corners[0][2] };
+            for (int screenY = boxTop; screenY <= boxBottom; screenY++) {
+                const double rayY = (horizon - screenY) / focal;
+                for (int screenX = boxLeft; screenX <= boxRight; screenX++) {
+                    double z;
+                    double u;
+                    double v;
+                    if (!first_person_sprite_ray_hit((screenX - width / 2.0) / focal, rayY,
+                            corners[0], edgeU, edgeV, &z, &u, &v)) {
+                        continue;
+                    }
+                    const int sourceX = std::min(frame->width - 1, static_cast<int>(u * frame->width));
+                    const int sourceY = std::min(frame->height - 1, static_cast<int>(v * frame->height));
+                    const int destination = screenY * width + screenX;
+                    if (opaqueMaxX >= opaqueMinX && opaqueMaxY >= opaqueMinY
+                        && sourceX >= opaqueMinX && sourceX <= opaqueMaxX
+                        && sourceY >= opaqueMinY && sourceY <= opaqueMaxY
+                        && z <= depthBuffer[destination] + 0.0001
+                        && z < interactionDepth[destination]) {
+                        interactionDepth[destination] = z;
+                        gFirstPersonInteractionPicks[destination] = { native, native->id };
+                    }
+                    const unsigned char pixel = pixels[sourceY * frame->width + sourceX];
+                    if (pixel != 0 && z < depthBuffer[destination]) {
+                        buffer[destination] = pixel;
+                        depthBuffer[destination] = z;
+                        gFirstPersonPicks[destination] = { native, native->id };
+                    }
+                }
+            }
+            art_ptr_unlock(cacheEntry);
+            continue;
+        }
         const int projectedWidth = std::max(1, static_cast<int>(focal * worldWidth / object.z));
         const int projectedHeight = std::max(1, static_cast<int>(focal * worldHeight / object.z));
         const int centerX = width / 2 + static_cast<int>(object.x * focal / object.z);

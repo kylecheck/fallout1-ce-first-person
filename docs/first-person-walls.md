@@ -1577,3 +1577,45 @@ FALLOUT_FP_SWEEP_MAPS=V13ENT.MAP,VAULT13.MAP,CAVES.MAP,VAULTBUR.MAP,HUBDWNTN.MAP
 g++ -std=c++17 -Wall -Wextra -Werror -Isrc tests/first_person_reach_test.cc -o /tmp/fp-reach-test && /tmp/fp-reach-test
 g++ -std=c++17 -Wall -Wextra -Werror -Isrc tests/first_person_seal_test.cc -o /tmp/fp-seal-test && /tmp/fp-seal-test
 ```
+
+### Scenery and item surfaces (`first_person_sprite_plane.h`)
+
+Scenery and items no longer stand on camera-facing cards at one depth. They
+keep their original frames, drawn on a world-space surface chosen from native
+data and the art's own outline (no per-asset lists):
+
+- Native flat objects (`OBJECT_FLAT`: bed rolls, rugs, bones, holes, the
+  vault floor art) lie on the floor. Each frame corner goes where native
+  drawing puts it (bottom centre at the hex centre plus the art offsets and the
+  object's shift), mapped back through the isometric projection, so they cover
+  the same floor as in the isometric view.
+- Art whose opaque columns form a band along a wall slope (top and bottom
+  edges both follow 0.75 for North/South or -0.25 for East/West, ignoring the
+  worst tenth of columns) goes on the nearest drawn wall segment on that axis
+  within about a hex, 0.04 in front of it on the native camera's side. Columns
+  keep their place along the wall and heights come from the isometric rise at
+  60 px per unit, as for wall art. Windows, vents and wall panels use this.
+- Everything else turns toward the viewer and leans back by the native camera's
+  angle (25.7°), pivoting about the middle of its visible height, so the front
+  comes forward and the top goes back (each by at most 0.35). Items still rest
+  their lowest visible pixel on the floor.
+
+Critters are unchanged. The surfaces are real quads: the GPU path submits them
+as screen-pixel numerators and clips them at the near plane; the software
+path intersects each pixel's ray with the parallelogram. Picks, interaction
+proxies (the opaque bounds on the same surface) and hover bounds follow the
+surface. `FALLOUT_FP_SPRITES_LEGACY=1` restores the cards for comparison.
+
+The elevator shaft's back machinery (`velev01.frm`) is a whole shaft corner
+drawn as one diamond-shaped sprite; it fits none of these surfaces and still
+leans.
+
+Sweep additions: `ART map elevation type name count width height flat tile
+distance` rows list the scenery, item and wall art per elevation;
+`FALLOUT_FP_SWEEP_ART=<dir>` saves each listed frame as a PPM (transparent as
+magenta); `FALLOUT_FP_SWEEP_NEAR=<a.frm,b.frm>` replaces the camera spots with
+views of objects using that art, from in front and 60° to either side.
+
+```sh
+g++ -std=c++17 -Wall -Wextra -Werror -Isrc tests/first_person_sprite_plane_test.cc -o /tmp/fp-sprite-plane-test && /tmp/fp-sprite-plane-test
+```
