@@ -64,6 +64,58 @@ inline void first_person_hud_blit(const unsigned char* source, int sourceWidth, 
         }
     }
 }
+// Pip-Boy date/time strip: the top-left of PIP.FRM, filled with NUMBERS.FRM
+// digits and MONTHS.FRM names at the positions the Pip-Boy itself uses.
+constexpr FirstPersonHudRect kFirstPersonHudPipDate { 0, 0, 222, 48 };
+struct FirstPersonHudArt {
+    const unsigned char* data;
+    int width;
+    int height;
+};
+// Opaque copy, as the Pip-Boy's buf_to_buf, clipped to both images.
+inline void first_person_hud_copy(const FirstPersonHudArt& art, int sx, int sy, int w, int h,
+    unsigned char* dest, int destWidth, int destHeight, int dx, int dy)
+{
+    if (art.data == nullptr) return;
+    for (int y = 0; y < h; y++) {
+        if (sy + y < 0 || sy + y >= art.height || dy + y < 0 || dy + y >= destHeight) continue;
+        for (int x = 0; x < w; x++) {
+            if (sx + x < 0 || sx + x >= art.width || dx + x < 0 || dx + x >= destWidth) continue;
+            dest[(dy + y) * destWidth + dx + x] = art.data[(sy + y) * art.width + sx + x];
+        }
+    }
+}
+// Native pip_num: right-aligned 9x17 digits.
+inline void first_person_hud_number(const FirstPersonHudArt& numbers, int value, int digits,
+    int x, int y, unsigned char* dest, int destWidth, int destHeight)
+{
+    value = std::max(0, value);
+    for (int i = digits - 1; i >= 0; i--) {
+        first_person_hud_copy(numbers, 9 * (value % 10), 0, 9, 17, dest, destWidth, destHeight, x + 9 * i, y);
+        value /= 10;
+    }
+}
+// Builds the strip into dest (kFirstPersonHudPipDate size). hhmm as
+// game_time_hour(); month 1-12 as game_time_date().
+inline void first_person_hud_compose_date(const FirstPersonHudArt& background,
+    const FirstPersonHudArt& numbers, const FirstPersonHudArt& months,
+    int month, int day, int year, int hhmm, unsigned char* dest)
+{
+    const FirstPersonHudRect r = kFirstPersonHudPipDate;
+    first_person_hud_copy(background, r.x, r.y, r.width, r.height, dest, r.width, r.height, 0, 0);
+    first_person_hud_number(numbers, day, 2, 20 - r.x, 17 - r.y, dest, r.width, r.height);
+    if (month >= 1 && month <= 12) {
+        first_person_hud_copy(months, 0, 15 * (month - 1), 29, 14, dest, r.width, r.height, 46 - r.x, 18 - r.y);
+    }
+    first_person_hud_number(numbers, year, 4, 83 - r.x, 17 - r.y, dest, r.width, r.height);
+    first_person_hud_number(numbers, hhmm, 4, 155 - r.x, 17 - r.y, dest, r.width, r.height);
+}
+// Top-left, at the same whole-number scale as the bottom pieces.
+inline FirstPersonHudPlacement first_person_hud_date_placement(int scale)
+{
+    return { { 0, 0, kFirstPersonHudPipDate.width, kFirstPersonHudPipDate.height }, 4 * scale, 4 * scale };
+}
+
 // Fingerprint of the mirrored regions, to redraw when native state changes.
 inline std::uint64_t first_person_hud_signature(const unsigned char* source, int sourceWidth, int sourceHeight)
 {

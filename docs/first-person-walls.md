@@ -1254,3 +1254,20 @@ shows only while `FALLOUT_FP_INPUT_LOG` is set.
 g++ -std=c++17 -Wall -Wextra -Werror -Isrc tests/first_person_hud_test.cc -o /tmp/fp-hud-test
 /tmp/fp-hud-test
 ```
+
+### Pip-Boy date strip and stimpak action
+
+The top-left of PIP.FRM (0,0 222x48) now sits at the top-left of the first-person
+view, at the same whole-number scale as the bar pieces. It is filled the way the
+Pip-Boy's `pip_date`/`pip_num` fill it: NUMBERS.FRM digits for day, year and the
+`game_time_hour` clock, and MONTHS.FRM for the month, at the native positions.
+The strip redraws when the native clock changes. The mode panel, notices and
+the input-log status line move below it; controller hints stay top-right.
+
+The action menu has a "Use stimpak" entry (two columns of nine rows). It uses a
+carried stimpak, or a super stimpak if none, through native `item_d_take_drug`,
+removing one from the stack as the combat AI does. In combat it costs the AP the
+inventory charges for opening, 4 less Quick Pockets, and is refused with a
+monitor message when AP is short. Outside combat it costs nothing, as with the
+inventory.
+

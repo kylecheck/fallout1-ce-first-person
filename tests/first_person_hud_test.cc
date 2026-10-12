@@ -93,5 +93,34 @@ int main()
     bar[50 * 640 + 300]++; // Item slot is not mirrored.
     bar[90 * 640 + 600]++; // Neither are the buttons.
     assert(first_person_hud_signature(bar.data(), 640, 100) == base);
-    std::cout << "PASS first-person HUD layout, bar copies, clipping and redraw signature\n";
+    // Pip-Boy date strip: native pip_date/pip_num positions inside PIP.FRM.
+    std::vector<unsigned char> pip(640 * 480);
+    for (int i = 0; i < 640 * 480; i++) pip[i] = static_cast<unsigned char>(i % 13 + 100);
+    std::vector<unsigned char> digits(360 * 17);
+    for (int i = 0; i < 360 * 17; i++) digits[i] = static_cast<unsigned char>((i % 360) / 9); // Glyph index.
+    std::vector<unsigned char> months(29 * 180);
+    for (int i = 0; i < 29 * 180; i++) months[i] = static_cast<unsigned char>(200 + (i / 29) / 15); // Month index.
+    constexpr int DW = kFirstPersonHudPipDate.width, DH = kFirstPersonHudPipDate.height;
+    std::vector<unsigned char> strip(DW * DH + 64, 0xEE);
+    first_person_hud_compose_date({ pip.data(), 640, 480 }, { digits.data(), 360, 17 },
+        { months.data(), 29, 180 }, 7, 5, 2161, 1342, strip.data());
+    for (int i = DW * DH; i < DW * DH + 64; i++) assert(strip[i] == 0xEE);
+    assert(strip[2 * DW + 2] == pip[2 * 640 + 2]); // Background outside the fields.
+    assert(strip[17 * DW + 20] == 0 && strip[17 * DW + 29] == 5); // Day "05".
+    assert(strip[18 * DW + 46] == 206 && strip[31 * DW + 74] == 206); // July, 29x14.
+    assert(strip[32 * DW + 46] == pip[32 * 640 + 46]);
+    assert(strip[17 * DW + 83] == 2 && strip[17 * DW + 92] == 1 && strip[17 * DW + 101] == 6
+        && strip[33 * DW + 118] == 1); // Year "2161".
+    assert(strip[17 * DW + 155] == 1 && strip[17 * DW + 164] == 3 && strip[17 * DW + 173] == 4
+        && strip[17 * DW + 182] == 2); // Time "1342".
+    assert(strip[17 * DW + 191] == pip[17 * 640 + 191]);
+    // Missing or small art never reads or writes outside its image.
+    std::vector<unsigned char> tiny(4 * 4, 9);
+    first_person_hud_compose_date({ tiny.data(), 4, 4 }, { nullptr, 0, 0 }, { tiny.data(), 4, 4 },
+        13, -3, 99999, 0, strip.data());
+    for (int i = DW * DH; i < DW * DH + 64; i++) assert(strip[i] == 0xEE);
+    assert(strip[0] == 9 && strip[17 * DW + 20] == 0);
+    const FirstPersonHudPlacement date = first_person_hud_date_placement(deck.scale);
+    assert(date.x == 8 && date.y == 8 && date.x + DW * 2 < 1280 - 570); // Clear of the top-right hints.
+    std::cout << "PASS first-person HUD layout, bar copies, clipping, Pip-Boy date strip and redraw signature\n";
 }

@@ -28,15 +28,19 @@
 #include "game/anim.h"
 #include "game/combat.h"
 #include "game/critter.h"
+#include "game/display.h"
 #include "game/gmouse.h"
 #include "game/intface.h"
+#include "game/inventry.h"
 #include "game/item.h"
 #include "game/map.h"
 #include "game/object_types.h"
 #include "game/tile.h"
 #include "game/object.h"
+#include "game/perk.h"
 #include "game/proto.h"
 #include "game/protinst.h"
+#include "game/scripts.h"
 #include "game/stat.h"
 #include "plib/color/color.h"
 #include "plib/gnw/gnw.h"
@@ -451,6 +455,42 @@ void first_person_resume_overlay()
 
 bool first_person_action_menu_active() { return gFirstPersonActionMenuActive; }
 
+// Command code for the action menu's stimpak entry, handled here rather than
+// through the input buffer.
+static constexpr int kFirstPersonUseStimpak = -1000;
+
+// Uses a carried stimpak as the inventory would: in combat it costs the AP
+// the inventory charges for opening (4, less Quick Pockets), and healing goes
+// through native item_d_take_drug. Removal follows the AI's drug use.
+static void first_person_use_stimpak()
+{
+    static char noStimpak[] = "You have no stimpaks.";
+    static char noAp[] = "You don't have enough action points.";
+    Object* stimpak = inven_pid_is_carried_ptr(obj_dude, PROTO_ID_STIMPACK);
+    if (stimpak == nullptr) stimpak = inven_pid_is_carried_ptr(obj_dude, PROTO_ID_SUPER_STIMPACK);
+    if (stimpak == nullptr) {
+        display_print(noStimpak);
+        return;
+    }
+    const int apCost = isInCombat() ? std::max(0, 4 - perk_level(PERK_QUICK_POCKETS)) : 0;
+    if (apCost > obj_dude->data.critter.combat.ap) {
+        display_print(noAp);
+        return;
+    }
+    if (item_remove_mult(obj_dude, stimpak, 1) != 0) return;
+    if (item_d_take_drug(obj_dude, stimpak) != 1) {
+        item_add_force(obj_dude, stimpak, 1);
+        return;
+    }
+    obj_connect(stimpak, obj_dude->tile, obj_dude->elevation, nullptr);
+    obj_destroy(stimpak);
+    if (apCost > 0) {
+        obj_dude->data.critter.combat.ap -= apCost;
+        intface_update_move_points(obj_dude->data.critter.combat.ap, combat_free_move);
+    }
+    intface_update_hit_points(true);
+}
+
 void first_person_action_menu()
 {
     if (!first_person_world_input_allowed()) return;
@@ -465,6 +505,7 @@ void first_person_action_menu()
         { "Switch hand [B]", KEY_LOWERCASE_B },
         { "Attack mode / aimed [N]", KEY_LOWERCASE_N },
         { "Use held item", -20 },
+        { "Use stimpak", kFirstPersonUseStimpak },
         { "Inventory [I]", KEY_LOWERCASE_I },
         { "Skills [S]", KEY_LOWERCASE_S },
         { "Pip-Boy [P]", KEY_LOWERCASE_P },
@@ -477,11 +518,12 @@ void first_person_action_menu()
         { "Move / interact / attack [M]", KEY_LOWERCASE_M },
     };
     constexpr int count = sizeof(commands) / sizeof(commands[0]);
+    constexpr int rows = (count + 1) / 2;
     const int oldFont = text_curr();
     text_font(101);
     const int w = 520;
     const int rowHeight = std::max(24, text_height() + 10);
-    const int h = 70 + 8 * rowHeight;
+    const int h = 70 + rows * rowHeight;
     const int win = win_add((scr_size.lrx + 1 - w) / 2, (scr_size.lry + 1 - h) / 2,
         w, h, colorTable[0], WINDOW_MODAL | WINDOW_MOVE_ON_TOP);
     if (win == -1) { text_font(oldFont); return; }
@@ -490,7 +532,7 @@ void first_person_action_menu()
     const bool restoreBackground = map_disable_bk_processes();
     gmouse_set_cursor(MOUSE_CURSOR_ARROW);
     for (int i = 0; i < count; i++) {
-        win_register_button(win, 8 + (i / 8) * 256, 38 + (i % 8) * rowHeight,
+        win_register_button(win, 8 + (i / rows) * 256, 38 + (i % rows) * rowHeight,
             250, rowHeight, -1, -1, -1, 2000 + i, nullptr, nullptr, nullptr, 0);
     }
     int selected = 0;
@@ -500,8 +542,8 @@ void first_person_action_menu()
         win_fill(win, 0, 0, w, h, colorTable[0]);
         win_print(win, "FIRST PERSON ACTIONS", w - 16, 8, 8, colorTable[992]);
         for (int i = 0; i < count; i++) {
-            const int x = 8 + (i / 8) * 256;
-            const int y = 38 + (i % 8) * rowHeight;
+            const int x = 8 + (i / rows) * 256;
+            const int y = 38 + (i % rows) * rowHeight;
             if (i == selected) win_box(win, x, y, x + 248, y + rowHeight - 1, colorTable[992]);
             win_print(win, commands[i].label, 240, x + 4, y + 5, colorTable[992]);
         }
@@ -511,7 +553,9 @@ void first_person_action_menu()
         if (input == KEY_ESCAPE || input == KEY_F8) break;
         if (input == KEY_ARROW_UP) selected = (selected + count - 1) % count;
         if (input == KEY_ARROW_DOWN) selected = (selected + 1) % count;
-        if (input == KEY_ARROW_LEFT || input == KEY_ARROW_RIGHT) selected = (selected + 8) % count;
+        if (input == KEY_ARROW_LEFT || input == KEY_ARROW_RIGHT) {
+            selected = std::min(count - 1, (selected + rows) % (2 * rows));
+        }
         if (input == KEY_RETURN) { command = commands[selected].key; break; }
         if (input >= 2000 && input < 2000 + count) { command = commands[input - 2000].key; break; }
         renderPresent();
@@ -526,7 +570,12 @@ void first_person_action_menu()
     gFirstPersonMoveTicks = 0;
     first_person_render();
     first_person_heap_check("fp-action-menu");
-    if (command != -1 && game_user_wants_to_quit == 0) GNW_add_input_buffer(command);
+    if (command == kFirstPersonUseStimpak && game_user_wants_to_quit == 0) {
+        first_person_use_stimpak();
+        first_person_render();
+    } else if (command != -1 && game_user_wants_to_quit == 0) {
+        GNW_add_input_buffer(command);
+    }
 }
 
 FirstPersonModalScope::FirstPersonModalScope()
@@ -597,8 +646,12 @@ void first_person_update()
             static std::uint64_t lastHud = 0;
             const std::uint64_t hud = first_person_hud_signature(bar,
                 win_width(interfaceWindow), win_height(interfaceWindow));
-            if (hud != lastHud) {
+            // The Pip-Boy strip shows the native clock to the minute.
+            static int lastClock = -1;
+            const int clock = game_time_hour();
+            if (hud != lastHud || clock != lastClock) {
                 lastHud = hud;
+                lastClock = clock;
                 first_person_render();
             }
         }
@@ -2876,6 +2929,35 @@ static void first_person_render_now()
         }
     }
 
+    // Pip-Boy date/time strip, top-left, from the Pip-Boy's own art and the
+    // native game clock. Everything below it in the top band moves down.
+    int topInset = 0;
+    {
+        const int scale = first_person_hud_layout(width, height).scale;
+        const int ids[3] = { 127, 82, 129 }; // PIP.FRM, NUMBERS.FRM, MONTHS.FRM.
+        FirstPersonHudArt art[3] = {};
+        CacheEntry* keys[3] = {};
+        for (int i = 0; i < 3; i++) {
+            art[i].data = art_lock(art_id(OBJ_TYPE_INTERFACE, ids[i], 0, 0, 0), &keys[i],
+                &art[i].width, &art[i].height);
+        }
+        if (art[0].data != nullptr) {
+            static unsigned char strip[kFirstPersonHudPipDate.width * kFirstPersonHudPipDate.height];
+            int month;
+            int day;
+            int year;
+            game_time_date(&month, &day, &year);
+            first_person_hud_compose_date(art[0], art[1], art[2], month, day, year, game_time_hour(), strip);
+            const FirstPersonHudPlacement date = first_person_hud_date_placement(scale);
+            first_person_hud_blit(strip, kFirstPersonHudPipDate.width, kFirstPersonHudPipDate.height,
+                date, scale, buffer, width, height);
+            topInset = date.y + kFirstPersonHudPipDate.height * scale + 4;
+        }
+        for (int i = 0; i < 3; i++) {
+            if (keys[i] != nullptr) art_ptr_unlock(keys[i]);
+        }
+    }
+
     // Original interface-bar pieces: the message monitor, HP/AC counters with
     // the ammo bar, and the AP lights. Native code keeps drawing these into
     // the hidden bar, so copying them shows live native state.
@@ -3100,10 +3182,10 @@ static void first_person_render_now()
         const int panelHeight =
             lineHeight * (combatLine[0] != '\0' ? 2 : 1) + padding * 2;
 
-        if (panelWidth > 0 && panelHeight > 0) {
-            buf_fill(buffer, panelWidth, panelHeight, width, colorTable[0]);
+        if (panelWidth > 0 && panelHeight > 0 && topInset + panelHeight <= height) {
+            buf_fill(buffer + topInset * width, panelWidth, panelHeight, width, colorTable[0]);
             text_to_buf(
-                buffer + padding * width + padding,
+                buffer + (topInset + padding) * width + padding,
                 modeLine,
                 panelWidth - padding * 2,
                 width,
@@ -3116,7 +3198,7 @@ static void first_person_render_now()
                     ? colorTable[31744]
                     : colorTable[992];
                 text_to_buf(
-                    buffer + (padding + lineHeight) * width + padding,
+                    buffer + (topInset + padding + lineHeight) * width + padding,
                     combatLine,
                     panelWidth - padding * 2,
                     width,
@@ -3132,7 +3214,7 @@ static void first_person_render_now()
     if (showControllerStatus) {
         const int oldFont = text_curr();
         text_font(101);
-        const int diagnosticY = text_height() * 4 + 24;
+        const int diagnosticY = std::min(height - text_height() - 4, topInset + text_height() * 4 + 24);
         buf_fill(buffer + diagnosticY * width, width, text_height() + 4, width, colorTable[0]);
         text_to_buf(buffer + (diagnosticY + 2) * width + 4, gamepad_diagnostic(),
             width - 8, width, colorTable[992]);
@@ -3160,7 +3242,7 @@ static void first_person_render_now()
     if (gFirstPersonNoticeUntil != 0) {
         const int oldFont = text_curr();
         text_font(101);
-        const int messageY = std::min(height - text_height() - 4, text_height() * 2 + 16);
+        const int messageY = std::min(height - text_height() - 4, topInset + text_height() * 2 + 16);
         buf_fill(buffer + messageY * width, width, text_height() + 4, width, colorTable[0]);
         text_to_buf(buffer + (messageY + 2) * width + 4, gFirstPersonNotice,
             width - 8, width, colorTable[992]);
