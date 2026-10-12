@@ -1259,6 +1259,15 @@ static void first_person_render_now()
     };
 
     constexpr double kEyeHeight = kFirstPersonEyeHeight;
+    // Roofs become ceilings at the structural wall-top height. Each square's
+    // roof shares its floor's footprint; the isometric view only draws it 96
+    // pixels higher. Tile 1 is the native "no roof" tile.
+    constexpr double kCeilingHeight = 1.65;
+    const int noRoofFid = art_id(OBJ_TYPE_TILE, 1, 0, 0, 0);
+    auto roofFid = [noRoofFid](int squareData) {
+        const int fid = art_id(OBJ_TYPE_TILE, (squareData >> 16) & 0xFFF, 0, 0, 0);
+        return fid == noRoofFid ? -1 : fid;
+    };
     constexpr double kIsoXFromWorldX = 27.712812921102035;
     constexpr double kIsoYFromWorldX = -6.928203230275509;
 
@@ -1279,45 +1288,56 @@ static void first_person_render_now()
             const double dy = (-kIsoYFromWorldX * isoDx + kIsoXFromWorldX * isoDy) / (kIsoXFromWorldX * 12.0 - 16.0 * kIsoYFromWorldX);
             const double z = dx * forwardX + dy * forwardY;
             if (z < -4.0 || z > kFarPlane + 4.0 || std::hypot(dx, dy) > kFarPlane + 4.0) continue;
-            const int fid = art_id(OBJ_TYPE_TILE, square[map_elevation]->field_0[tile] & 0xFFF, 0, 0, 0);
-            FirstPersonFloorArt* art = getFloorArt(fid);
-            if (!art) continue;
-            const double sx[4] = { 0.0, static_cast<double>(art->frame->width), static_cast<double>(art->frame->width), 0.0 };
-            const double sy[4] = { 0.0, 0.0, static_cast<double>(art->frame->height), static_cast<double>(art->frame->height) };
-            FirstPersonGpuVertex vertices[4];
-            for (int i = 0; i < 4; i++) {
-                const double a = isoDx + sx[i], b = isoDy + sy[i];
-                const double wx = (12.0 * a - 16.0 * b) / (kIsoXFromWorldX * 12.0 - 16.0 * kIsoYFromWorldX);
-                const double wy = (-kIsoYFromWorldX * a + kIsoXFromWorldX * b) / (kIsoXFromWorldX * 12.0 - 16.0 * kIsoYFromWorldX);
-                const double cx = wx * rightX + wy * rightY, cz = wx * forwardX + wy * forwardY;
-                vertices[i] = { static_cast<float>(width * 0.5 * cz + focal * cx),
-                    static_cast<float>(horizon * cz + focal * kEyeHeight), static_cast<float>(cz),
-                    (i == 1 || i == 2) ? 1.0f : 0.0f, (i >= 2) ? 1.0f : 0.0f };
-            }
-            // Match native square ownership rather than drawing overlapping
-            // rectangular floor FRMs as competing pieces of geometry.
-            FloorFace* face = nullptr;
-            for (auto& cached : floorFaces) {
-                if (cached.fid == fid) { face = &cached; break; }
-            }
-            if (!face) {
-                FloorFace masked { fid, art->frame->width, art->frame->height, {} };
-                masked.pixels.assign(art->pixels, art->pixels + masked.width * masked.height);
-                for (int y = 0; y < masked.height; y++) {
-                    for (int x = 0; x < masked.width; x++) {
-                        if (square_num(ix + x, iy + y, map_elevation) != tile) {
-                            masked.pixels[y * masked.width + x] = 0;
+            const int squareData = square[map_elevation]->field_0[tile];
+            const int floorFid = art_id(OBJ_TYPE_TILE, squareData & 0xFFF, 0, 0, 0);
+            const int ceilingFid = roofFid(squareData);
+            for (int layer = 0; layer < 2; layer++) {
+                const int fid = layer == 0 ? floorFid : ceilingFid;
+                if (fid == -1) continue;
+                const double planeHeight = layer == 0 ? kEyeHeight : kEyeHeight - kCeilingHeight;
+                FirstPersonFloorArt* art = getFloorArt(fid);
+                if (!art) continue;
+                const double sx[4] = { 0.0, static_cast<double>(art->frame->width), static_cast<double>(art->frame->width), 0.0 };
+                const double sy[4] = { 0.0, 0.0, static_cast<double>(art->frame->height), static_cast<double>(art->frame->height) };
+                FirstPersonGpuVertex vertices[4];
+                for (int i = 0; i < 4; i++) {
+                    const double a = isoDx + sx[i], b = isoDy + sy[i];
+                    const double wx = (12.0 * a - 16.0 * b) / (kIsoXFromWorldX * 12.0 - 16.0 * kIsoYFromWorldX);
+                    const double wy = (-kIsoYFromWorldX * a + kIsoXFromWorldX * b) / (kIsoXFromWorldX * 12.0 - 16.0 * kIsoYFromWorldX);
+                    const double cx = wx * rightX + wy * rightY, cz = wx * forwardX + wy * forwardY;
+                    vertices[i] = { static_cast<float>(width * 0.5 * cz + focal * cx),
+                        static_cast<float>(horizon * cz + focal * planeHeight), static_cast<float>(cz),
+                        (i == 1 || i == 2) ? 1.0f : 0.0f, (i >= 2) ? 1.0f : 0.0f };
+                }
+                // Match native square ownership rather than drawing overlapping
+                // rectangular floor FRMs as competing pieces of geometry.
+                FloorFace* face = nullptr;
+                for (auto& cached : floorFaces) {
+                    if (cached.fid == fid) { face = &cached; break; }
+                }
+                if (!face) {
+                    FloorFace masked { fid, art->frame->width, art->frame->height, {} };
+                    masked.pixels.assign(art->pixels, art->pixels + masked.width * masked.height);
+                    for (int y = 0; y < masked.height; y++) {
+                        for (int x = 0; x < masked.width; x++) {
+                            if (square_num(ix + x, iy + y, map_elevation) != tile) {
+                                masked.pixels[y * masked.width + x] = 0;
+                            }
                         }
                     }
+                    floorFaces.push_back(std::move(masked)); face = &floorFaces.back();
                 }
-                floorFaces.push_back(std::move(masked)); face = &floorFaces.back();
+                first_person_world_gpu_quad(face->pixels.data(), face->width, face->height, vertices, 0, false, static_cast<float>(kFarPlane));
             }
-            first_person_world_gpu_quad(face->pixels.data(), face->width, face->height, vertices, 0, false, static_cast<float>(kFarPlane));
         }
     }
     constexpr int kFloorSampleStep = 2;
-    for (int screenY = std::max(0, horizon + 1); !gpuWorld && screenY < height; screenY += kFloorSampleStep) {
-        const double cameraZ = focal * kEyeHeight / (screenY - horizon);
+    // Rows below the horizon sample the floor; rows above it the ceiling.
+    for (int screenY = 0; !gpuWorld && screenY < height; screenY += kFloorSampleStep) {
+        if (screenY == horizon) continue;
+        const bool ceiling = screenY < horizon;
+        const double cameraZ = ceiling ? focal * (kCeilingHeight - kEyeHeight) / (horizon - screenY)
+                                       : focal * kEyeHeight / (screenY - horizon);
         if (cameraZ < kNearPlane || cameraZ > kFarPlane) {
             continue;
         }
@@ -1340,8 +1360,10 @@ static void first_person_render_now()
             }
 
             const int floorData = square[map_elevation]->field_0[squareTile];
-            const int frmId = floorData & 0xFFF;
-            const int fid = art_id(OBJ_TYPE_TILE, frmId, 0, 0, 0);
+            const int fid = ceiling ? roofFid(floorData) : art_id(OBJ_TYPE_TILE, floorData & 0xFFF, 0, 0, 0);
+            if (fid == -1) {
+                continue;
+            }
 
             int floorIsoX = 0;
             int floorIsoY = 0;
@@ -3308,6 +3330,49 @@ int first_person_sweep_map(std::FILE* out, const char* mapName, void (*progress)
             if (type == OBJ_TYPE_MISC) avoid[object->tile] = 1;
         }
         if (structure.empty()) continue;
+
+        // Ceiling alignment: how many walls sit under a roof square at each
+        // square offset. Roofs share their floor's square, so (0,0) should win.
+        {
+            const int noRoofFid = art_id(OBJ_TYPE_TILE, 1, 0, 0, 0);
+            int roofSquares = 0;
+            for (int i = 0; i < SQUARE_GRID_SIZE; i++) {
+                if (art_id(OBJ_TYPE_TILE, (square[elevation]->field_0[i] >> 16) & 0xFFF, 0, 0, 0) != noRoofFid) roofSquares++;
+            }
+            int counts[7][7] = {};
+            int walls = 0;
+            for (Object* object = obj_find_first_at(elevation); object != nullptr; object = obj_find_next_at()) {
+                if (FID_TYPE(object->fid) != OBJ_TYPE_WALL || object->tile < 0) continue;
+                int x;
+                int y;
+                tile_coord(object->tile, &x, &y, elevation);
+                const int squareTile = square_num(x + 16, y + 8, elevation);
+                if (squareTile < 0 || squareTile >= SQUARE_GRID_SIZE) continue;
+                walls++;
+                for (int oy = -3; oy <= 3; oy++) {
+                    for (int ox = -3; ox <= 3; ox++) {
+                        const int sx = squareTile % 100 + ox;
+                        const int sy = squareTile / 100 + oy;
+                        if (sx < 0 || sx >= 100 || sy < 0 || sy >= 100) continue;
+                        if (art_id(OBJ_TYPE_TILE, (square[elevation]->field_0[sy * 100 + sx] >> 16) & 0xFFF, 0, 0, 0) != noRoofFid) {
+                            counts[oy + 3][ox + 3]++;
+                        }
+                    }
+                }
+            }
+            int bestX = 0;
+            int bestY = 0;
+            for (int oy = -3; oy <= 3; oy++) {
+                for (int ox = -3; ox <= 3; ox++) {
+                    if (counts[oy + 3][ox + 3] > counts[bestY + 3][bestX + 3]) {
+                        bestX = ox;
+                        bestY = oy;
+                    }
+                }
+            }
+            std::fprintf(out, "ROOF\t%s\t%d\t%d\t%d\t%d\t%d\t%d\t%d\n", mapName, elevation, roofSquares,
+                walls, counts[3][3], bestX, bestY, counts[bestY + 3][bestX + 3]);
+        }
 
         // Unblocked hexes on a coarse grid, near walls or scenery (within
         // about six hexes, marked once rather than measured pairwise).

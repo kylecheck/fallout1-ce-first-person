@@ -1296,7 +1296,9 @@ unblocked hexes near structure, avoiding exit grids, at four headings each.
 Scripts are disabled after each load and the game loop never runs, so nothing
 advances. Rows: `MAP index name` (flushed before the load, so a crash names
 its map), `FRAME map elevation tile heading ms coverage objects renderer`
-(coverage is the share of pixels owning a pickable object) and `DONE map frames`.
+(coverage is the share of pixels owning a pickable object), `ROOF map elevation
+roofSquares walls wallsUnderRoof bestOffsetX bestOffsetY wallsAtBest` (see
+ceilings below) and `DONE map frames`.
 A map with no progress for 60 s is written as `STUCK` and ends the run;
 `FALLOUT_FP_MAP_SWEEP_FROM=<index>` resumes after it. Combine with
 `FALLOUT_FP_HEAP_CHECK=1` to validate the art cache after every frame. It runs
@@ -1310,3 +1312,23 @@ FALLOUT_FP_MAP_SWEEP=/tmp/fp-sweep.tsv ~/fallout1-ce-first-person/build/fallout-
 
 Frame times under the offscreen driver come from software OpenGL and do not
 predict Deck performance; compare them only between sweeps.
+
+### Roof tiles as ceilings
+
+Each map square stores a roof tile in the high 16 bits of the word that holds
+its floor tile. The isometric view draws it 96 pixels higher over the same
+footprint and hides it while the player is underneath. First person draws every
+roof square that is not tile 1 (native "no roof") as a ceiling plane at the
+structural wall-top height (1.65), using the floor's square mapping, masks and
+both renderer paths: GPU quads beside the floor quads, and the software
+sampler, which now fills rows above the horizon from roofs and rows below from
+floors. Squares without roofs keep the sky. The roof's hidden bit is ignored:
+it only marks squares the player stands under. Vault and cave maps have no roof
+tiles and are unchanged.
+
+The sweep's `ROOF` rows check the shared-footprint assumption: for each wall,
+whether a roof square sits at each square offset from the wall's own square.
+Across all maps 28 of 34 roofed elevations peak at (0,0); the rest are small or
+partial roofs with narrow margins (for example 52 against 56), VIPERS
+being the clearest exception. Sweep frame times were unchanged.
+
