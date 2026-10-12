@@ -21,6 +21,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <map>
+#include <string>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -4005,6 +4007,20 @@ static void first_person_render_now()
 
 namespace fallout {
 
+// Whether name appears in a comma-separated list.
+static bool first_person_sweep_lists_art(const char* list, const char* name)
+{
+    const size_t length = std::strlen(name);
+    for (const char* at = list; *at != '\0';) {
+        const char* end = std::strchr(at, ',');
+        const size_t itemLength = end != nullptr ? static_cast<size_t>(end - at) : std::strlen(at);
+        if (itemLength == length && strncasecmp(at, name, length) == 0) return true;
+        if (end == nullptr) break;
+        at = end + 1;
+    }
+    return false;
+}
+
 // Diagnostic map sweep (FALLOUT_FP_MAP_SWEEP, see main.cc). Renders the loaded
 // map from spread-out standing spots on every used elevation, four headings
 // each, and writes one TSV row per frame. Native state is only read, apart
@@ -4140,6 +4156,58 @@ int first_person_sweep_map(std::FILE* out, const char* mapName, void (*progress)
             }
         }
 
+        // Scenery, item and wall art on the elevation, once per art: name, count,
+        // shown frame size, native flat flag, a sample tile and its distance
+        // from walkable space.
+        {
+            struct ArtUse { int count; int width; int height; int flat; int tile; int type; };
+            std::map<std::string, ArtUse> uses;
+            for (Object* object = obj_find_first_at(elevation); object != nullptr; object = obj_find_next_at()) {
+                const int type = FID_TYPE(object->fid);
+                if ((type != OBJ_TYPE_SCENERY && type != OBJ_TYPE_ITEM && type != OBJ_TYPE_WALL) || object->tile < 0) continue;
+                char artName[64] = { 0 };
+                if (art_get_base_name(type, object->fid & 0xFFF, artName) != 0) continue;
+                ArtUse& use = uses[artName];
+                if (use.count++ == 0) {
+                    use = { 1, 0, 0, (object->flags & OBJECT_FLAT) != 0, object->tile, type };
+                    CacheEntry* entry = nullptr;
+                    Art* art = art_ptr_lock(object->fid, &entry);
+                    if (art != nullptr) {
+                        const int direction = ((object->rotation % ROTATION_COUNT) + ROTATION_COUNT) % ROTATION_COUNT;
+                        ArtFrame* frame = frame_ptr(art, std::clamp(object->frame, 0, std::max(0, art_frame_max_frame(art) - 1)), direction);
+                        if (frame != nullptr) {
+                            use.width = frame->width;
+                            use.height = frame->height;
+                            // Opt-in: save the frame (index 0 as magenta).
+                            static const char* artDirectory = std::getenv("FALLOUT_FP_SWEEP_ART");
+                            const unsigned char* data = art_frame_data(art,
+                                std::clamp(object->frame, 0, std::max(0, art_frame_max_frame(art) - 1)), direction);
+                            char artPath[512];
+                            std::snprintf(artPath, sizeof(artPath), "%s/%s.ppm", artDirectory, artName);
+                            if (std::FILE* image = artDirectory != nullptr && data != nullptr ? std::fopen(artPath, "wb") : nullptr) {
+                                std::fprintf(image, "P6\n%d %d\n255\n", frame->width, frame->height);
+                                for (int i = 0; i < frame->width * frame->height; i++) {
+                                    const unsigned char rgb[3] = {
+                                        static_cast<unsigned char>(data[i] == 0 ? 255 : cmap[data[i] * 3] * 4),
+                                        static_cast<unsigned char>(data[i] == 0 ? 0 : cmap[data[i] * 3 + 1] * 4),
+                                        static_cast<unsigned char>(data[i] == 0 ? 255 : cmap[data[i] * 3 + 2] * 4) };
+                                    std::fwrite(rgb, 1, 3, image);
+                                }
+                                std::fclose(image);
+                            }
+                        }
+                        art_ptr_unlock(entry);
+                    }
+                }
+            }
+            const FirstPersonReach& artReach = first_person_reach(elevation);
+            for (const auto& [name, use] : uses) {
+                std::fprintf(out, "ART\t%s\t%d\t%s\t%s\t%d\t%d\t%d\t%d\t%d\t%d\n", mapName, elevation,
+                    use.type == OBJ_TYPE_SCENERY ? "scenery" : (use.type == OBJ_TYPE_WALL ? "wall" : "item"), name.c_str(), use.count,
+                    use.width, use.height, use.flat, use.tile, artReach.distance[use.tile]);
+            }
+        }
+
         // Only hexes the player can walk to are worth looking from.
         const FirstPersonReach& reach = first_person_reach(elevation);
         {
@@ -4222,11 +4290,75 @@ int first_person_sweep_map(std::FILE* out, const char* mapName, void (*progress)
         if (elevation == startElevation) spots.push_back(startTile);
         const size_t want = std::min<size_t>(kSpotsPerElevation, candidates.size());
         for (size_t i = 0; i < want; i++) spots.push_back(candidates[i * candidates.size() / want]);
+        // FALLOUT_FP_SWEEP_NEAR=<a.frm,b.frm> replaces the spots with views of
+        // objects using that art: from in front (the native camera's side)
+        // and 60 degrees to either side, two to four hexes away, facing it.
+        std::vector<int> spotHeadings(spots.size(), -1);
+        static const char* nearArt = std::getenv("FALLOUT_FP_SWEEP_NEAR");
+        if (nearArt != nullptr) {
+            spots.clear();
+            spotHeadings.clear();
+            auto world = [](int tile, double* x, double* y) {
+                *x = -(tile % 200) * 0.8660254037844386;
+                *y = tile / 200 - ((tile % 200) & 1) * 0.5;
+            };
+            for (Object* object = obj_find_first_at(elevation); object != nullptr; object = obj_find_next_at()) {
+                if (object->tile < 0) continue;
+                char artName[64] = { 0 };
+                if (art_get_base_name(FID_TYPE(object->fid), object->fid & 0xFFF, artName) != 0
+                    || !first_person_sweep_lists_art(nearArt, artName)) {
+                    continue;
+                }
+                double ox;
+                double oy;
+                world(object->tile, &ox, &oy);
+                for (double side : { 0.0, -1.0471975511965976, 1.0471975511965976 }) {
+                    const double frontAngle = std::atan2(0.8660254037844386, -0.5) + side;
+                    int best = -1;
+                    double bestScore = 1.0e9;
+                    const int row = object->tile / 200;
+                    const int column = object->tile % 200;
+                    for (int r = std::max(0, row - 5); r <= std::min(199, row + 5); r++) {
+                        for (int c = std::max(0, column - 5); c <= std::min(199, column + 5); c++) {
+                            const int tile = r * 200 + c;
+                            const int distance = first_person_hex_distance(tile, object->tile);
+                            if (distance < 2 || distance > 4 || !reach.reachable[tile]
+                                || obj_blocking_at(nullptr, tile, elevation) != nullptr) {
+                                continue;
+                            }
+                            double tx;
+                            double ty;
+                            world(tile, &tx, &ty);
+                            double off = std::atan2(ty - oy, tx - ox) - frontAngle;
+                            off = std::abs(std::remainder(off, 2.0 * 3.14159265358979323846));
+                            const double score = off + 0.05 * std::abs(distance - 3);
+                            if (off < 0.6 && score < bestScore) {
+                                bestScore = score;
+                                best = tile;
+                            }
+                        }
+                    }
+                    if (best < 0) continue;
+                    double tx;
+                    double ty;
+                    world(best, &tx, &ty);
+                    const double yaw = std::atan2(oy - ty, ox - tx);
+                    int heading = static_cast<int>(std::lround((yaw + 3.14159265358979323846 / 6.0)
+                        / (3.14159265358979323846 / 12.0)));
+                    heading = ((heading % 24) + 24) % 24;
+                    spots.push_back(best);
+                    spotHeadings.push_back(heading);
+                }
+            }
+        }
 
-        for (int spot : spots) {
+        for (size_t spotIndex = 0; spotIndex < spots.size(); spotIndex++) {
+            const int spot = spots[spotIndex];
             if (map_elevation != elevation) map_set_elevation(elevation);
             obj_move_to_tile(obj_dude, spot, elevation, nullptr);
-            for (int heading = 0; heading < 24; heading += 6) {
+            const int firstHeading = spotHeadings[spotIndex] >= 0 ? spotHeadings[spotIndex] : 0;
+            const int lastHeading = spotHeadings[spotIndex] >= 0 ? spotHeadings[spotIndex] : 18;
+            for (int heading = firstHeading; heading <= lastHeading; heading += 6) {
                 gFirstPersonHeading = heading;
                 gFirstPersonPitchDegrees = 0.0;
                 gFirstPersonCameraRevision++;
