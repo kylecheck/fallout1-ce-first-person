@@ -2466,7 +2466,18 @@ static void first_person_render_now()
                     const int sideB = first_person_world_tile(midX - normalX, midY - normalY);
                     const int depthA = sideA >= 0 ? reach.distance[sideA] : kFirstPersonReachLimit;
                     const int depthB = sideB >= 0 ? reach.distance[sideB] : kFirstPersonReachLimit;
-                    if (first_person_leak_fixes() && std::max(depthA, depthB) >= 2) {
+                    // Doorway art and walls framing a door keep their openings:
+                    // filled, they read as a closed door or a wall in the way.
+                    bool besideDoor = false;
+                    for (int doorTile : doorTiles) {
+                        if (first_person_hex_distance(doorTile, wall.tile) <= 2) {
+                            besideDoor = true;
+                            break;
+                        }
+                    }
+                    if (first_person_leak_fixes() && std::max(depthA, depthB) >= 2 && !besideDoor
+                        && !first_person_material_has_doorway(material->pixels.data(), material->width,
+                            material->height)) {
                         material = solidMaterial(material, materialWall->fid, materialWall->direction);
                         gFirstPersonSolidFaces++;
                     }
@@ -2646,8 +2657,39 @@ static void first_person_render_now()
                 }
                 sealSources.emplace(object->tile, SealSource { object->fid, direction, extendedFlags });
             }
+            // Doors (scenery) close their openings as walls do: their hexes
+            // and panels count as cover, so doorways get no seal faces.
+            for (Object* object = obj_find_first_at(map_elevation); object != nullptr; object = obj_find_next_at()) {
+                Proto* proto = nullptr;
+                if (object->tile < 0 || object->tile >= kFirstPersonTileCount
+                    || PID_TYPE(object->pid) != OBJ_TYPE_SCENERY || proto_ptr(object->pid, &proto) != 0
+                    || proto == nullptr || proto->scenery.type != SCENERY_TYPE_DOOR) {
+                    continue;
+                }
+                wallTiles[object->tile] = 1;
+                double worldX;
+                double worldY;
+                tileToWorld(object->tile, &worldX, &worldY);
+                const int direction = ((object->rotation % ROTATION_COUNT) + ROTATION_COUNT) % ROTATION_COUNT;
+                for (const FirstPersonWallSegment& segment : first_person_wall_segments(object->tile,
+                         static_cast<unsigned int>(proto->scenery.extendedFlags), direction, worldX, worldY)) {
+                    wallSegments.push_back({ object->tile, segment });
+                }
+            }
             seals = first_person_seal_faces(reach.reachable, wallTiles, reach.floorless, wallSegments, tileToWorld,
                 first_person_world_tile);
+            // Door protos often carry corner orientations, so their panels
+            // need not cover the doorway's edges: drop any seal within a hex
+            // of a door.
+            seals.erase(std::remove_if(seals.begin(), seals.end(), [&](const FirstPersonSealFace& seal) {
+                for (int doorTile : doorTiles) {
+                    if (first_person_hex_distance(doorTile, seal.walkTile) <= 1
+                        || first_person_hex_distance(doorTile, seal.wallTile) <= 1) {
+                        return true;
+                    }
+                }
+                return false;
+            }), seals.end());
             gFirstPersonSealFaces = static_cast<int>(seals.size());
         }
 
@@ -4864,6 +4906,22 @@ int first_person_sweep_map(std::FILE* out, const char* mapName, void (*progress)
         // objects using that art: from in front (the native camera's side)
         // and 60 degrees to either side, two to four hexes away, facing it.
         std::vector<int> spotHeadings(spots.size(), -1);
+        // FALLOUT_FP_SWEEP_OPEN_DOORS=1 shows every door on its last
+        // (fully open) frame, as after the native open animation.
+        if (std::getenv("FALLOUT_FP_SWEEP_OPEN_DOORS") != nullptr) {
+            for (Object* object = obj_find_first_at(elevation); object != nullptr; object = obj_find_next_at()) {
+                Proto* proto = nullptr;
+                if (PID_TYPE(object->pid) != OBJ_TYPE_SCENERY || proto_ptr(object->pid, &proto) != 0
+                    || proto == nullptr || proto->scenery.type != SCENERY_TYPE_DOOR) {
+                    continue;
+                }
+                CacheEntry* entry = nullptr;
+                if (Art* art = art_ptr_lock(object->fid, &entry)) {
+                    object->frame = std::max(0, art_frame_max_frame(art) - 1);
+                    art_ptr_unlock(entry);
+                }
+            }
+        }
         static const char* nearArt = std::getenv("FALLOUT_FP_SWEEP_NEAR");
         if (nearArt != nullptr) {
             spots.clear();

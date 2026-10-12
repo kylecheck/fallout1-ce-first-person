@@ -84,6 +84,33 @@ inline FirstPersonRectifiedMaterial first_person_rectify_columns(
     return result;
 }
 
+// Whether a wall face has a doorway: a see-through opening reaching its
+// bottom row that is at least a quarter of its width and rises at least half
+// its height. Rock faces have small gaps at their edges, not these.
+inline bool first_person_material_has_doorway(const unsigned char* pixels, int width, int height)
+{
+    if (pixels == nullptr || width <= 0 || height <= 0) return false;
+    int run = 0;
+    int best = 0;
+    int bestStart = 0;
+    for (int x = 0; x < width; x++) {
+        // Columns open at the bottom and above it for half the height.
+        bool open = true;
+        for (int y = height - 1; y >= height / 2 && open; y--) open = pixels[y * width + x] == 0;
+        if (open) {
+            run++;
+            if (run > best) {
+                best = run;
+                bestStart = x - run + 1;
+            }
+        } else {
+            run = 0;
+        }
+    }
+    // An opening at the face's very edge is a gap beside it, not a doorway.
+    return best * 4 >= width && bestStart > 0 && bestStart + best < width;
+}
+
 // A wall face that backs onto solid rock or void must not be see-through.
 // Fills each transparent (0) pixel from the nearest opaque pixel in its
 // column, passed through shade (e.g. the native intensity table), then fills

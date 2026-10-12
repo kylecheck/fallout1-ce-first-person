@@ -1530,6 +1530,19 @@ filled from the nearest opaque pixel in the same column, darkened through
 walkable spaces (fences, wall art with doorway openings) keep their
 transparency.
 
+Doors are scenery, not walls, so these fixes first ignored them: seal faces
+went up across doorways (hiding Vault 13's doors) and doorway frames whose far
+side is thick wall had their openings filled, reading as walls where none
+were. Faces within 2 hexes of a door, and faces whose art has a doorway (a
+see-through opening at the bottom, a quarter of the width and half the
+height, away from the face's ends: `first_person_material_has_doorway`),
+keep their transparency. Door hexes and panels count as cover for seal faces,
+and no seal face is built within a hex of a door (door protos often carry
+corner orientations, so their panels need not line up with the doorway).
+Leak measures on the test maps are unchanged (Vault 13 e0 sky 2.98 to 3.04%).
+`FALLOUT_FP_SWEEP_OPEN_DOORS=1` shows every door on its open frame in the
+sweep.
+
 ### Interior ceilings
 
 On elevations without roof tiles, when the walkable area does not come within

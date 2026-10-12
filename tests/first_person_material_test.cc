@@ -44,5 +44,28 @@ int main()
         first_person_fill_material_holes(dark, 1, 2, [](unsigned char) { return static_cast<unsigned char>(0); });
         assert(dark[0] == 9);
     }
+    // Doorways: an opening at the bottom, a quarter of the width, half the
+    // height, away from the edges. Edge gaps and small holes are not.
+    {
+        const int w = 40;
+        const int h = 40;
+        std::vector<unsigned char> face(w * h, 7);
+        for (int y = 12; y < h; y++) {
+            for (int x = 14; x < 26; x++) face[y * w + x] = 0;
+        }
+        assert(first_person_material_has_doorway(face.data(), w, h));
+        std::vector<unsigned char> edge(w * h, 7);
+        for (int y = 0; y < h; y++) {
+            for (int x = 0; x < 12; x++) edge[y * w + x] = 0;
+        }
+        assert(!first_person_material_has_doorway(edge.data(), w, h));
+        std::vector<unsigned char> small(w * h, 7);
+        for (int y = 30; y < h; y++) {
+            for (int x = 14; x < 26; x++) small[y * w + x] = 0;
+        }
+        assert(!first_person_material_has_doorway(small.data(), w, h));
+        std::vector<unsigned char> solid(w * h, 7);
+        assert(!first_person_material_has_doorway(solid.data(), w, h));
+    }
     std::cout << "Material shear and opening regression tests passed\n";
 }
