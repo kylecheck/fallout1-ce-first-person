@@ -16,9 +16,11 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <thread>
 #include <stddef.h>
 
+#include "platform_compat.h"
 #include "game/amutex.h"
 #include "game/art.h"
 #include "game/credits.h"
@@ -330,6 +332,24 @@ static void main_unload_new()
 
 static std::atomic<int> main_fp_sweep_steps { 0 };
 
+// Whether name (case-insensitive) is an entry of the comma-separated list.
+static bool main_fp_sweep_selected(const char* list, const char* name)
+{
+    const size_t length = std::strlen(name);
+    for (const char* entry = list; *entry != '\0';) {
+        const char* end = std::strchr(entry, ',');
+        const size_t entryLength = end != nullptr ? static_cast<size_t>(end - entry) : std::strlen(entry);
+        if (entryLength == length && compat_strnicmp(entry, name, length) == 0) {
+            return true;
+        }
+        if (end == nullptr) {
+            break;
+        }
+        entry = end + 1;
+    }
+    return false;
+}
+
 static void main_fp_sweep_step()
 {
     main_fp_sweep_steps++;
@@ -375,14 +395,21 @@ static int main_fp_map_sweep(const char* path)
         }
     });
 
+    // FALLOUT_FP_SWEEP_MAPS=<A.MAP,B.MAP> limits the sweep to those maps.
+    const char* only = std::getenv("FALLOUT_FP_SWEEP_MAPS");
+    bool loaded = false;
     proto_dude_init("premade\\combat.gcd");
     for (int index = from; index < fileListLength; index++) {
+        if (only != nullptr && !main_fp_sweep_selected(only, fileList[index])) {
+            continue;
+        }
         current = index;
         std::fprintf(out, "MAP\t%d\t%s\n", index, fileList[index]);
         std::fflush(out);
         main_fp_sweep_step();
-        if (index == from) {
+        if (!loaded) {
             main_load_new(fileList[index]);
+            loaded = true;
         } else {
             map_load(fileList[index]);
         }

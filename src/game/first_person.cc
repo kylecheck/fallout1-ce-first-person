@@ -3826,6 +3826,26 @@ int first_person_sweep_map(std::FILE* out, const char* mapName, void (*progress)
                 first_person_render_now();
                 const double ms = (SDL_GetPerformanceCounter() - start) * 1000.0
                     / static_cast<double>(SDL_GetPerformanceFrequency());
+                // Opt-in screenshots of the windowed frame (palette-mapped PPM).
+                static const char* shotDirectory = std::getenv("FALLOUT_FP_SWEEP_SHOTS");
+                if (shotDirectory != nullptr && gFirstPersonWindow != -1) {
+                    const unsigned char* shot = win_get_buf(gFirstPersonWindow);
+                    const int shotWidth = win_width(gFirstPersonWindow);
+                    const int shotHeight = win_height(gFirstPersonWindow);
+                    char shotPath[512];
+                    std::snprintf(shotPath, sizeof(shotPath), "%s/%s_e%d_t%d_h%02d.ppm", shotDirectory, mapName,
+                        elevation, spot, heading);
+                    if (std::FILE* image = shot != nullptr ? std::fopen(shotPath, "wb") : nullptr) {
+                        std::fprintf(image, "P6\n%d %d\n255\n", shotWidth, shotHeight);
+                        for (int i = 0; i < shotWidth * shotHeight; i++) {
+                            const unsigned char rgb[3] = { static_cast<unsigned char>(cmap[shot[i] * 3] * 4),
+                                static_cast<unsigned char>(cmap[shot[i] * 3 + 1] * 4),
+                                static_cast<unsigned char>(cmap[shot[i] * 3 + 2] * 4) };
+                            std::fwrite(rgb, 1, 3, image);
+                        }
+                        std::fclose(image);
+                    }
+                }
                 const std::vector<FirstPersonPickRect> windows = gPickFull
                     ? std::vector<FirstPersonPickRect> {}
                     : gPickRects;

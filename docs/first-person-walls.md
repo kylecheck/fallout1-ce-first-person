@@ -1314,6 +1314,11 @@ FALLOUT_FP_MAP_SWEEP=/tmp/fp-sweep.tsv ~/fallout1-ce-first-person/build/fallout-
 Frame times under the offscreen driver come from software OpenGL and do not
 predict Deck performance; compare them only between sweeps.
 
+`FALLOUT_FP_SWEEP_MAPS=V13ENT.MAP,VAULT13.MAP` limits the sweep to those maps,
+and `FALLOUT_FP_SWEEP_SHOTS=<dir>` saves each windowed frame as a
+palette-mapped PPM named `<map>_e<elevation>_t<tile>_h<heading>.ppm`, so views
+can be inspected without the device.
+
 ### Roof tiles as ceilings
 
 Each map square stores a roof tile in the high 16 bits of the word that holds
