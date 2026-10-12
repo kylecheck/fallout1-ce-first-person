@@ -1485,3 +1485,95 @@ from 10.3 to 8.0 ms.
 g++ -O2 -std=c++17 -Wall -Wextra -Werror -Isrc tests/first_person_hex_test.cc -o /tmp/fp-hex-test
 /tmp/fp-hex-test
 ```
+
+## Wall leak pass: reachability, solid backs, interior ceilings and seals
+
+Screenshots of V13ENT, VAULT13 and VAULTBUR showed why rock and wall masses
+looked like hollow "boxes" and why some walls had gaps. The isometric maps
+build solid rock as an outline of wall pieces with nothing inside, and the
+original art hides several kinds of opening that first person exposes:
+transparent pixels in wall FRMs, wall pieces that only met through sprite
+overlap, invisible blockers with no drawn face, and floorless void around a
+map's interiors. Native movement, collision and pathing are unchanged by
+everything below; it only changes what first person draws.
+
+### Reachability (`first_person_reach.h`)
+
+Walkable hexes for first person: a flood from the player over native
+adjacency, stopped by what native `obj_blocking_at` blocks (visible, blocking
+walls and scenery, multi-hex scenery over its neighbours; items never block),
+except critters (they move) and doors (they open), and by hexes whose square has
+no floor art (tile 1, which draws nothing: the void). It is cached per map
+elevation and recomputed when the player is outside the cached area. Without
+the player on the elevation (the sweep, before visiting) critters and exit grids
+seed it, leaving out groups that reach the map edge (scripts park critters in
+the void) unless every group does. Each hex also gets its distance from the
+walkable area, capped at 8.
+
+### Leak measurement
+
+The sweep now picks camera spots only on walkable hexes (about half used to be
+in the void around the map) and, for each full-readback frame, samples every
+4th pixel: `leakVoid` is the share whose floor- or wall-height surface lies 3+
+hexes from walkable space (seen through a gap; ceiling over rock is not a
+leak), `leakSky` the share with no surface at all while the camera is under a
+ceiling. `REACH map elevation reachable edgeReachable` rows, and `solidFaces`
+and `sealFaces` per frame, go with them. `FALLOUT_FP_REACH_TRACE=1` traces the
+path from the entrance to the map edge when the walkable area reaches it.
+
+### Solid wall backs
+
+A wall face with one side more than a hex beyond walkable space backs onto
+rock or void. Its material is replaced by a copy whose transparent pixels are
+filled from the nearest opaque pixel in the same column, darkened through
+`intensityColorTable` (`first_person_fill_material_holes`). Faces between two
+walkable spaces (fences, wall art with doorway openings) keep their
+transparency.
+
+### Interior ceilings
+
+On elevations without roof tiles, when the walkable area does not reach the map
+edge (a vault level, a cave), every square within 7 hexes of it gets a ceiling,
+so the ceiling also covers the tops of rock and wall masses. The enclosed-pocket
+ceilings remain for areas that do reach the edge.
+
+### Seal faces (`first_person_seal.h`)
+
+Where a walkable hex meets a wall hex (visible wall or invisible blocker) or a
+floorless hex, and no drawn wall face stands behind that hex edge, a solid face
+is drawn along the edge with the nearest wall's material (filled). An edge is
+covered when rays from its middle and near its ends, straight across it, all
+meet a drawn wall segment within 3 units while crossing only wall hexes: that
+accepts real walls set back behind a row of invisible blockers (common in the
+vaults) and rejects openings into the void. Edges with no wall within three
+hexes (the open edge of an outdoor map) get no face. Faces are built once per
+walkable area and drawn without a pick owner, so they hide objects behind them
+without becoming targets.
+
+Leak measurement on the six test maps, the same spots and metric with the
+fixes off (`FALLOUT_FP_WALL_LEAKS_LEGACY=1`) and on:
+
+| Map | leakVoid off | on | leakSky off | on |
+| --- | --- | --- | --- | --- |
+| VAULTBUR e0 | 4.36% | 2.01% | 3.48% | 1.55% |
+| VAULTBUR e1 | 1.36% | 0.55% | 1.97% | 1.44% |
+| CAVES | 1.56% | 0.43% | 5.06% | 2.23% |
+| VAULT13 e0 | 3.58% | 1.89% | 6.29% | 2.98% |
+| V13ENT | 0.56% | 0.21% | 2.42% | 0.74% |
+| HUBDWNTN e0, JUNKENT e0 | unchanged | | unchanged | |
+
+The full 72-map sweep ran clean with the heap check and 0 pick mismatches;
+the walls stage costs about 0.2 ms more per frame.
+
+The worst remaining VAULTBUR view looks through an opening into a separate
+cave chamber that is not reachable from the camera, which the metric counts but
+which is not a hole. The six-map sweeps used:
+
+```sh
+FALLOUT_FP_SWEEP_MAPS=V13ENT.MAP,VAULT13.MAP,CAVES.MAP,VAULTBUR.MAP,HUBDWNTN.MAP,JUNKENT.MAP
+```
+
+```sh
+g++ -std=c++17 -Wall -Wextra -Werror -Isrc tests/first_person_reach_test.cc -o /tmp/fp-reach-test && /tmp/fp-reach-test
+g++ -std=c++17 -Wall -Wextra -Werror -Isrc tests/first_person_seal_test.cc -o /tmp/fp-seal-test && /tmp/fp-seal-test
+```

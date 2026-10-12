@@ -13,6 +13,8 @@
 #include "game/first_person_facing.h"
 #include "game/first_person_material.h"
 #include "game/first_person_profile.h"
+#include "game/first_person_reach.h"
+#include "game/first_person_seal.h"
 
 #include <algorithm>
 #include <cmath>
@@ -282,6 +284,15 @@ struct FirstPersonObjectSprite {
     double x;
     double z;
 };
+
+// The hex at a renderer world position: the inverse of the renderer's
+// tileToWorld (x = -column * sqrt(3)/2, y = row - (column & 1) / 2), or -1.
+static int first_person_world_tile(double worldX, double worldY)
+{
+    const int column = static_cast<int>(std::lround(-worldX / 0.8660254037844386));
+    const int row = static_cast<int>(std::lround(worldY + (column & 1) * 0.5));
+    return column < 0 || column >= 200 || row < 0 || row >= 200 ? -1 : row * 200 + column;
+}
 
 // Converts an isometric screen-pixel offset on the ground plane (a native
 // object's sub-tile x/y shift) into a renderer world-plane displacement; the
@@ -1155,6 +1166,158 @@ void first_person_flush_render()
     first_person_heap_check(gFirstPersonLastFrameGpu ? "fp-frame-gpu" : "fp-frame-software");
 }
 
+// Hexes the player can walk to on an elevation, and each hex's distance from
+// them (capped at kFirstPersonReachLimit). What native obj_blocking_at treats
+// as blocking stops the flood, except critters (they move) and doors (they
+// open). Seeded from the player, recomputed when the player is outside the
+// cached area (elevators, ladders) or the map or elevation changes.
+struct FirstPersonReach {
+    std::vector<unsigned char> reachable;
+    std::vector<unsigned char> distance;
+    // Hexes whose square has no floor art.
+    std::vector<unsigned char> floorless;
+    // Whether the walkable area reaches the map's edge rows (open outdoors).
+    bool touchesEdge = false;
+    // Changes on every recomputation, for caches built from this one.
+    int revision = 0;
+};
+static constexpr int kFirstPersonReachLimit = 8;
+
+static const FirstPersonReach& first_person_reach(int elevation)
+{
+    static char cachedMap[sizeof(map_data.name)] = {};
+    static int cachedElevation = -1;
+    static bool cachedFromPlayer = false;
+    static FirstPersonReach reach;
+    const int playerTile = obj_dude != nullptr && obj_dude->elevation == elevation
+            && obj_dude->tile >= 0 && obj_dude->tile < kFirstPersonTileCount
+        ? obj_dude->tile
+        : -1;
+    if (cachedElevation == elevation && std::strncmp(cachedMap, map_data.name, sizeof(cachedMap)) == 0
+        && (playerTile >= 0 ? cachedFromPlayer && reach.reachable[playerTile] != 0 : !cachedFromPlayer)) {
+        return reach;
+    }
+    std::memcpy(cachedMap, map_data.name, sizeof(cachedMap));
+    cachedElevation = elevation;
+    cachedFromPlayer = playerTile >= 0;
+    std::vector<unsigned char> blocked(kFirstPersonTileCount, 0);
+    // Hexes without floor art (native tile 1, which draws nothing) are the
+    // void around a map's interiors: first person does not treat them as
+    // walkable, even where native movement has no object to stop it.
+    reach.floorless.assign(kFirstPersonTileCount, 0);
+    for (int tile = 0; tile < kFirstPersonTileCount; tile++) {
+        if ((square[elevation]->field_0[first_person_tile_square(tile)] & 0xFFF) == 1) {
+            reach.floorless[tile] = 1;
+            blocked[tile] = 1;
+        }
+    }
+    std::vector<int> seeds;
+    for (Object* object = obj_find_first_at(elevation); object != nullptr; object = obj_find_next_at()) {
+        if (object == obj_dude || object->tile < 0 || object->tile >= kFirstPersonTileCount) continue;
+        const int type = FID_TYPE(object->fid);
+        if (type == OBJ_TYPE_CRITTER) {
+            seeds.push_back(object->tile);
+            continue;
+        }
+        if (type == OBJ_TYPE_MISC) {
+            if (object->pid >= 0x5000010 && object->pid <= 0x5000017) seeds.push_back(object->tile);
+            continue;
+        }
+        if (type == OBJ_TYPE_SCENERY) {
+            Proto* proto = nullptr;
+            if (PID_TYPE(object->pid) == OBJ_TYPE_SCENERY && proto_ptr(object->pid, &proto) == 0
+                && proto != nullptr && proto->scenery.type == SCENERY_TYPE_DOOR) {
+                continue;
+            }
+        }
+        // As native obj_blocking_at: visible, blocking walls and scenery, and
+        // multi-hex scenery also over its six neighbours. Items never block.
+        if ((type != OBJ_TYPE_WALL && type != OBJ_TYPE_SCENERY)
+            || (object->flags & (OBJECT_HIDDEN | OBJECT_NO_BLOCK)) != 0) {
+            continue;
+        }
+        blocked[object->tile] = 1;
+        if ((object->flags & OBJECT_MULTIHEX) != 0) {
+            for (int direction = 0; direction < 6; direction++) {
+                const int neighbor = first_person_hex_neighbor(object->tile, direction);
+                if (neighbor >= 0) blocked[neighbor] = 1;
+            }
+        }
+    }
+    if (playerTile >= 0) {
+        // Where the player can walk from where they stand.
+        reach.reachable = first_person_reachable_tiles(blocked, { playerTile });
+    } else {
+        // No player here (the sweep, before visiting): critters and exit grids,
+        // leaving out groups that reach the map edge (scripts park critters
+        // in the void around a map) unless every group does (open outdoors).
+        auto touchesEdge = [](const std::vector<unsigned char>& tiles) {
+            for (int i = 0; i < 200; i++) {
+                if (tiles[i] || tiles[199 * 200 + i] || tiles[i * 200] || tiles[i * 200 + 199]) return true;
+            }
+            return false;
+        };
+        reach.reachable.assign(kFirstPersonTileCount, 0);
+        std::vector<unsigned char> everything(kFirstPersonTileCount, 0);
+        for (int seed : seeds) {
+            if (everything[seed]) continue;
+            const std::vector<unsigned char> group = first_person_reachable_tiles(blocked, { seed });
+            const bool edge = touchesEdge(group);
+            for (int tile = 0; tile < kFirstPersonTileCount; tile++) {
+                if (!group[tile]) continue;
+                everything[tile] = 1;
+                if (!edge) reach.reachable[tile] = 1;
+            }
+        }
+        bool any = false;
+        for (unsigned char tile : reach.reachable) any = any || tile != 0;
+        if (!any) reach.reachable = everything;
+    }
+    reach.distance = first_person_reach_distance(reach.reachable, kFirstPersonReachLimit);
+    reach.touchesEdge = false;
+    for (int i = 0; i < 200 && !reach.touchesEdge; i++) {
+        reach.touchesEdge = reach.reachable[i] || reach.reachable[199 * 200 + i] || reach.reachable[i * 200]
+            || reach.reachable[i * 200 + 199];
+    }
+    reach.revision++;
+    return reach;
+}
+
+// Ceiling squares on an elevation without roof tiles: the enclosed pockets
+// (first_person_enclosed_ceiling) and, when the walkable area does not reach
+// the map edge (underground: a vault level, a cave), every square within a
+// few hexes of it, walls and rock masses included. Elevations with roof tiles
+// get none.
+static const std::vector<unsigned char>& first_person_ceiling_squares(int elevation);
+
+// The last rendered frame's camera, for the map sweep's leak measurement.
+struct FirstPersonCamera {
+    double focal;
+    int horizon;
+    double eyeHeight;
+    double worldX;
+    double worldY;
+    double forwardX;
+    double forwardY;
+    double rightX;
+    double rightY;
+    int width;
+    int height;
+};
+static FirstPersonCamera gFirstPersonLastCamera {};
+// FALLOUT_FP_WALL_LEAKS_LEGACY=1 turns off solid wall backs, interior
+// ceilings and seal faces, for comparison.
+static bool first_person_leak_fixes()
+{
+    static const bool legacy = std::getenv("FALLOUT_FP_WALL_LEAKS_LEGACY") != nullptr;
+    return !legacy;
+}
+
+// Wall faces drawn with filled (solid) material in the last frame.
+static int gFirstPersonSolidFaces = 0;
+// Seal faces built for the current walkable area.
+static int gFirstPersonSealFaces = 0;
+
 // Squares that get a synthesized ceiling on an elevation without roof tiles
 // (see first_person_ceiling.h). Walls, doors and invisible blockers bound
 // the indoors. Cached per map elevation; empty when the elevation has roofs.
@@ -1192,6 +1355,32 @@ static const std::vector<unsigned char>& first_person_enclosed_ceiling(int eleva
         }
     }
     squares = first_person_enclosed_squares(barrier, first_person_hex_neighbor);
+    return squares;
+}
+
+static const std::vector<unsigned char>& first_person_ceiling_squares(int elevation)
+{
+    const std::vector<unsigned char>& enclosed = first_person_enclosed_ceiling(elevation);
+    const FirstPersonReach& reach = first_person_reach(elevation);
+    static int cachedRevision = -1;
+    static std::vector<unsigned char> squares;
+    if (cachedRevision == reach.revision) return squares;
+    cachedRevision = reach.revision;
+    squares = enclosed;
+    const int noRoofFid = art_id(OBJ_TYPE_TILE, 1, 0, 0, 0);
+    for (int i = 0; i < SQUARE_GRID_SIZE; i++) {
+        if (art_id(OBJ_TYPE_TILE, (square[elevation]->field_0[i] >> 16) & 0xFFF, 0, 0, 0) != noRoofFid) {
+            return squares;
+        }
+    }
+    if (first_person_leak_fixes() && !reach.touchesEdge) {
+        // Over the walkable area and everything within a few hexes of it, so
+        // the ceiling also runs over the tops of the rock and wall masses
+        // standing in it.
+        for (int tile = 0; tile < kFirstPersonTileCount; tile++) {
+            if (reach.distance[tile] < kFirstPersonReachLimit) squares[first_person_tile_square(tile)] = 1;
+        }
+    }
     return squares;
 }
 
@@ -1300,6 +1489,8 @@ static void first_person_render_now()
     const double forwardY = std::sin(yaw);
     const double rightX = -forwardY;
     const double rightY = forwardX;
+    gFirstPersonLastCamera = { width * 0.70, first_person_horizon(width, height), kFirstPersonEyeHeight,
+        playerWorldX, playerWorldY, forwardX, forwardY, rightX, rightY, width, height };
     const double focal = width * 0.70;
 
     // v0.012: a small software depth buffer shared by the first-person passes.
@@ -1369,7 +1560,9 @@ static void first_person_render_now()
     };
     // Roofless elevations: enclosed squares use their own floor tile,
     // darkened through the native intensity table, as the ceiling.
-    const std::vector<unsigned char>& enclosedCeiling = first_person_enclosed_ceiling(map_elevation);
+    const std::vector<unsigned char>& enclosedCeiling = first_person_ceiling_squares(map_elevation);
+    const FirstPersonReach& reach = first_person_reach(map_elevation);
+    gFirstPersonSolidFaces = 0;
     constexpr int kSynthesizedCeilingIntensity = 80; // Of 128.
     auto darken = [](unsigned char pixel) {
         const unsigned char dark = intensityColorTable[pixel][kSynthesizedCeilingIntensity];
@@ -1395,12 +1588,15 @@ static void first_person_render_now()
         static std::vector<FloorSquare> floorSquares;
         static char floorMap[sizeof(map_data.name)] = {};
         static int floorElevation = -1;
+        static int floorReachRevision = -1;
         int baseX = 0;
         int baseY = 0;
         square_coord(0, &baseX, &baseY, map_elevation);
-        if (floorElevation != map_elevation || std::strncmp(floorMap, map_data.name, sizeof(floorMap)) != 0) {
+        if (floorElevation != map_elevation || floorReachRevision != reach.revision
+            || std::strncmp(floorMap, map_data.name, sizeof(floorMap)) != 0) {
             std::memcpy(floorMap, map_data.name, sizeof(floorMap));
             floorElevation = map_elevation;
+            floorReachRevision = reach.revision;
             floorSquares.clear();
             for (int tile = 0; tile < SQUARE_GRID_SIZE; tile++) {
                 int ix = 0, iy = 0;
@@ -2126,6 +2322,21 @@ static void first_person_render_now()
 
     profileMark(FP_PROFILE_TOPOLOGY);
 
+    // A wall material with its see-through pixels filled, for faces that back
+    // onto solid rock or void. Kept per (fid, direction) across frames.
+    auto solidMaterial = [&](FirstPersonWallMaterial* material, int fid, int direction) -> FirstPersonWallMaterial* {
+        const std::uint64_t key = (static_cast<std::uint64_t>(static_cast<unsigned int>(fid)) << 3)
+            | static_cast<std::uint64_t>(direction & 7);
+        static std::unordered_map<std::uint64_t, FirstPersonWallMaterial> solidMaterials;
+        auto solid = solidMaterials.find(key);
+        if (solid == solidMaterials.end()) {
+            FirstPersonWallMaterial filled = *material;
+            first_person_fill_material_holes(filled.pixels, filled.width, filled.height, darken);
+            solid = solidMaterials.emplace(key, std::move(filled)).first;
+        }
+        return &solid->second;
+    };
+
     // Structural geometry and wall material are deliberately separate. Straight
     // pieces keep their own art; each corner arm first tries to borrow the
     // continuation wall's clean straight material. This avoids folding one
@@ -2157,6 +2368,29 @@ static void first_person_render_now()
                 }
                 if (material == nullptr || material->width <= 0 || material->height <= 0) {
                     continue;
+                }
+            }
+
+            // A face with solid rock or void behind it (one side more than a
+            // hex beyond walkable space) gets its see-through pixels filled.
+            // Faces between walkable spaces (fences, doorway art) keep them.
+            if (material != nullptr) {
+                const double midX = (sourceSegment.ax + sourceSegment.bx) * 0.5;
+                const double midY = (sourceSegment.ay + sourceSegment.by) * 0.5;
+                const double alongX = sourceSegment.bx - sourceSegment.ax;
+                const double alongY = sourceSegment.by - sourceSegment.ay;
+                const double length = std::hypot(alongX, alongY);
+                if (length > 0.0) {
+                    const double normalX = -alongY / length * 0.9;
+                    const double normalY = alongX / length * 0.9;
+                    const int sideA = first_person_world_tile(midX + normalX, midY + normalY);
+                    const int sideB = first_person_world_tile(midX - normalX, midY - normalY);
+                    const int depthA = sideA >= 0 ? reach.distance[sideA] : kFirstPersonReachLimit;
+                    const int depthB = sideB >= 0 ? reach.distance[sideB] : kFirstPersonReachLimit;
+                    if (first_person_leak_fixes() && std::max(depthA, depthB) >= 2) {
+                        material = solidMaterial(material, materialWall->fid, materialWall->direction);
+                        gFirstPersonSolidFaces++;
+                    }
                 }
             }
 
@@ -2286,6 +2520,129 @@ static void first_person_render_now()
                             wall.object,
                             wall.object->id,
                         };
+                    }
+                }
+            }
+        }
+    }
+
+    // Seal faces (first_person_seal.h): solid wall faces along hex edges where
+    // walkable space meets a wall or invisible blocker that no drawn wall face
+    // covers. Built per walkable area; each frame only culls and draws them.
+    {
+        struct SealSource { int fid; int direction; unsigned int extendedFlags; };
+        static int sealRevision = -1;
+        static int sealElevation = -1;
+        static std::vector<FirstPersonSealFace> seals;
+        static std::unordered_map<int, SealSource> sealSources;
+        if (sealRevision != reach.revision || sealElevation != map_elevation) {
+            sealRevision = reach.revision;
+            sealElevation = map_elevation;
+            sealSources.clear();
+            std::vector<unsigned char> wallTiles(kFirstPersonTileCount, 0);
+            std::vector<std::pair<int, FirstPersonWallSegment>> wallSegments;
+            for (Object* object = obj_find_first_at(map_elevation); object != nullptr; object = obj_find_next_at()) {
+                if (object->tile < 0 || object->tile >= kFirstPersonTileCount
+                    || FID_TYPE(object->fid) != OBJ_TYPE_WALL || (object->flags & OBJECT_HIDDEN) != 0) {
+                    continue;
+                }
+                wallTiles[object->tile] = 1;
+                char artName[64] = { 0 };
+                if (art_get_base_name(OBJ_TYPE_WALL, object->fid & 0xFFF, artName) != 0
+                    || std::strcmp(artName, "block.frm") == 0) {
+                    continue;
+                }
+                unsigned int extendedFlags = 0;
+                Proto* proto = nullptr;
+                if (PID_TYPE(object->pid) == OBJ_TYPE_WALL && proto_ptr(object->pid, &proto) == 0 && proto != nullptr) {
+                    extendedFlags = static_cast<unsigned int>(proto->wall.extendedFlags);
+                }
+                const int direction = ((object->rotation % ROTATION_COUNT) + ROTATION_COUNT) % ROTATION_COUNT;
+                double worldX;
+                double worldY;
+                tileToWorld(object->tile, &worldX, &worldY);
+                for (const FirstPersonWallSegment& segment :
+                    first_person_wall_segments(object->tile, extendedFlags, direction, worldX, worldY)) {
+                    wallSegments.push_back({ object->tile, segment });
+                }
+                sealSources.emplace(object->tile, SealSource { object->fid, direction, extendedFlags });
+            }
+            seals = first_person_seal_faces(reach.reachable, wallTiles, reach.floorless, wallSegments, tileToWorld,
+                first_person_world_tile);
+            gFirstPersonSealFaces = static_cast<int>(seals.size());
+        }
+
+        static const std::vector<FirstPersonSealFace> noSeals;
+        const std::vector<FirstPersonSealFace>& drawnSeals = first_person_leak_fixes() ? seals : noSeals;
+        for (const FirstPersonSealFace& seal : drawnSeals) {
+            const int sealTile = first_person_world_tile((seal.ax + seal.bx) * 0.5, (seal.ay + seal.by) * 0.5);
+            if (sealTile < 0 || first_person_hex_distance(obj_dude->tile, sealTile) > kRenderRadius) continue;
+            auto source = sealSources.find(seal.materialTile);
+            if (source == sealSources.end()) continue;
+            FirstPersonWallMaterial* material = getWallMaterial(source->second.fid, source->second.direction,
+                source->second.extendedFlags);
+            if (material == nullptr || material->width <= 0 || material->height <= 0) continue;
+            material = solidMaterial(material, source->second.fid, source->second.direction);
+
+            const double adx = seal.ax - playerWorldX;
+            const double ady = seal.ay - playerWorldY;
+            const double bdx = seal.bx - playerWorldX;
+            const double bdy = seal.by - playerWorldY;
+            double ax = adx * rightX + ady * rightY;
+            double az = adx * forwardX + ady * forwardY;
+            double bx = bdx * rightX + bdy * rightY;
+            double bz = bdx * forwardX + bdy * forwardY;
+            double u0 = 0.2;
+            double u1 = 0.8;
+            if (!first_person_clip_wall(ax, az, bx, bz, u0, u1, kNearPlane)) continue;
+
+            const int screenAX = width / 2 + static_cast<int>(ax * focal / az);
+            const int screenBX = width / 2 + static_cast<int>(bx * focal / bz);
+            const int groundAY = horizon + static_cast<int>(focal * kEyeHeight / az);
+            const int groundBY = horizon + static_cast<int>(focal * kEyeHeight / bz);
+            const int topAY = groundAY - static_cast<int>(focal * kStructuralWallHeight / az);
+            const int topBY = groundBY - static_cast<int>(focal * kStructuralWallHeight / bz);
+            const int minX = std::max(0, std::min(screenAX, screenBX));
+            const int maxX = std::min(width - 1, std::max(screenAX, screenBX));
+            const double screenSpan = static_cast<double>(screenBX - screenAX);
+            if (minX > maxX || std::abs(screenSpan) < 1.0) continue;
+
+            if (gpuWorld) {
+                const FirstPersonGpuVertex vertices[4] = {
+                    gpuVertex(screenAX, topAY, az, u0, 0.0),
+                    gpuVertex(screenBX, topBY, bz, u1, 0.0),
+                    gpuVertex(screenBX, groundBY, bz, u1, 1.0),
+                    gpuVertex(screenAX, groundAY, az, u0, 1.0),
+                };
+                first_person_world_gpu_quad(material->pixels.data(), material->width, material->height, vertices, 0);
+                continue;
+            }
+
+            const double invAz = 1.0 / az;
+            const double invBz = 1.0 / bz;
+            for (int screenX = minX; screenX <= maxX; screenX++) {
+                const double t = (screenX - screenAX) / screenSpan;
+                if (t < 0.0 || t > 1.0) continue;
+                const double invZ = invAz + (invBz - invAz) * t;
+                if (invZ <= 0.0) continue;
+                const double z = 1.0 / invZ;
+                const double u = ((1.0 - t) * u0 * invAz + t * u1 * invBz) / invZ;
+                const int bottom = static_cast<int>(groundAY + (groundBY - groundAY) * t);
+                const int top = static_cast<int>(topAY + (topBY - topAY) * t);
+                const int columnHeight = bottom - top;
+                if (columnHeight <= 0) continue;
+                const int materialX = std::clamp(static_cast<int>(std::lround(std::clamp(u, 0.0, 1.0)
+                                                      * std::max(0, material->width - 1))),
+                    0, std::max(0, material->width - 1));
+                for (int screenY = std::max(0, top); screenY <= std::min(height - 1, bottom); screenY++) {
+                    const int materialY = std::clamp((screenY - top) * material->height / columnHeight, 0,
+                        std::max(0, material->height - 1));
+                    const unsigned char pixel = material->pixels[materialY * material->width + materialX];
+                    const int destination = screenY * width + screenX;
+                    if (pixel != 0 && z < depthBuffer[destination]) {
+                        buffer[destination] = pixel;
+                        depthBuffer[destination] = z;
+                        gFirstPersonPicks[destination] = { nullptr, -1 };
                     }
                 }
             }
@@ -3783,6 +4140,61 @@ int first_person_sweep_map(std::FILE* out, const char* mapName, void (*progress)
             }
         }
 
+        // Only hexes the player can walk to are worth looking from.
+        const FirstPersonReach& reach = first_person_reach(elevation);
+        {
+            int reachable = 0;
+            int seedsOutside = 0;
+            for (int tile = 0; tile < kFirstPersonTileCount; tile++) reachable += reach.reachable[tile];
+            for (int i = 0; i < 200; i++) {
+                seedsOutside += reach.reachable[i] + reach.reachable[199 * 200 + i] + reach.reachable[i * 200]
+                    + reach.reachable[i * 200 + 199];
+            }
+            std::fprintf(out, "REACH\t%s\t%d\t%d\t%d\n", mapName, elevation, reachable, seedsOutside);
+            // FALLOUT_FP_REACH_TRACE=1: where the flood from the entrance first
+            // leaves walled space, as the path to the map edge and its objects.
+            static const bool trace = std::getenv("FALLOUT_FP_REACH_TRACE") != nullptr;
+            int traceFrom = elevation == startElevation ? startTile : -1;
+            for (Object* object = obj_find_first_at(elevation); object != nullptr && traceFrom < 0;
+                 object = obj_find_next_at()) {
+                if (FID_TYPE(object->fid) == OBJ_TYPE_CRITTER && object->tile >= 0) traceFrom = object->tile;
+            }
+            if (trace && seedsOutside > 0 && traceFrom >= 0) {
+                std::fprintf(out, "TRACEFROM\t%s\t%d\t%d\n", mapName, elevation, traceFrom);
+                std::vector<int> parent(kFirstPersonTileCount, -2);
+                std::vector<int> queue { traceFrom };
+                parent[traceFrom] = -1;
+                int edge = -1;
+                for (size_t head = 0; head < queue.size() && edge < 0; head++) {
+                    const int at = queue[head];
+                    const int row = at / 200;
+                    const int column = at % 200;
+                    if (row == 0 || row == 199 || column == 0 || column == 199) {
+                        edge = at;
+                        break;
+                    }
+                    for (int direction = 0; direction < 6; direction++) {
+                        const int next = first_person_hex_neighbor(at, direction);
+                        if (next < 0 || parent[next] != -2 || !reach.reachable[next]) continue;
+                        parent[next] = at;
+                        queue.push_back(next);
+                    }
+                }
+                for (int at = edge; at >= 0; at = parent[at]) {
+                    std::fprintf(out, "TRACE\t%s\t%d\t%d\t%d", mapName, at, at % 200, at / 200);
+                    for (Object* object = obj_find_first_at(elevation); object != nullptr;
+                         object = obj_find_next_at()) {
+                        if (object->tile != at) continue;
+                        char artName[64] = { 0 };
+                        art_get_base_name(FID_TYPE(object->fid), object->fid & 0xFFF, artName);
+                        std::fprintf(out, "\t%d:%s:%08x", FID_TYPE(object->fid), artName, object->flags);
+                    }
+                    std::fprintf(out, "\n");
+                }
+            }
+        }
+        const std::vector<unsigned char>& ceilingSquares = first_person_ceiling_squares(elevation);
+
         // Unblocked hexes on a coarse grid, near walls or scenery (within
         // about six hexes, marked once rather than measured pairwise).
         std::vector<unsigned char> nearStructure(kTileCount, 0);
@@ -3799,7 +4211,7 @@ int first_person_sweep_map(std::FILE* out, const char* mapName, void (*progress)
         for (int row = 3; row < 200; row += 7) {
             for (int column = 3; column < 200; column += 7) {
                 const int tile = row * 200 + column;
-                if (!nearStructure[tile] || avoid[tile]
+                if (!nearStructure[tile] || avoid[tile] || !reach.reachable[tile]
                     || obj_blocking_at(nullptr, tile, elevation) != nullptr) {
                     continue;
                 }
@@ -3862,6 +4274,39 @@ int first_person_sweep_map(std::FILE* out, const char* mapName, void (*progress)
                 gFirstPersonCameraRevision++;
                 first_person_render_now();
                 gFirstPersonFullReadback = false;
+                // Leaks: sampled pixels whose floor- or wall-height surface lies
+                // 3+ hexes from any walkable hex (seen through a gap), and, under
+                // a ceiling, pixels with no surface at all (sky through a gap).
+                int leakVoid = 0;
+                int leakSky = 0;
+                int sampled = 0;
+                {
+                    const FirstPersonCamera& camera = gFirstPersonLastCamera;
+                    const int cameraSquare = first_person_tile_square(spot);
+                    const bool covered = (square[elevation]->field_0[cameraSquare] >> 16 & 0xFFF) != 1
+                        || ceilingSquares[cameraSquare] != 0;
+                    for (int y = 0; y < camera.height; y += 4) {
+                        for (int x = 0; x < camera.width; x += 4) {
+                            const size_t i = static_cast<size_t>(y) * camera.width + x;
+                            if (i >= gFirstPersonDepthBuffer.size()) continue;
+                            sampled++;
+                            const double z = gFirstPersonDepthBuffer[i];
+                            if (z >= 1.0e29) {
+                                leakSky += covered;
+                                continue;
+                            }
+                            const double cameraX = (x - camera.width * 0.5) * z / camera.focal;
+                            const double worldX = camera.worldX + camera.rightX * cameraX + camera.forwardX * z;
+                            const double worldY = camera.worldY + camera.rightY * cameraX + camera.forwardY * z;
+                            // A ceiling over rock is not a leak; floor or wall
+                            // seen deep in unwalkable space is.
+                            const double hitHeight = camera.eyeHeight - (y - camera.horizon) * z / camera.focal;
+                            if (hitHeight > 1.55) continue;
+                            const int hit = first_person_world_tile(worldX, worldY);
+                            leakVoid += hit < 0 || reach.distance[hit] >= 3;
+                        }
+                    }
+                }
                 int mismatches = 0;
                 size_t next = 0;
                 for (const FirstPersonPickRect& r : windows) {
@@ -3887,9 +4332,11 @@ int first_person_sweep_map(std::FILE* out, const char* mapName, void (*progress)
                 ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
                 const double coverage = gFirstPersonPicks.empty() ? -1.0
                     : static_cast<double>(covered) / gFirstPersonPicks.size();
-                std::fprintf(out, "FRAME\t%s\t%d\t%d\t%d\t%.2f\t%.3f\t%zu\t%s\t%zu\t%d\n", mapName, elevation,
-                    spot, heading, ms, coverage, ids.size(), gFirstPersonLastFrameGpu ? "gpu" : "software",
-                    windows.size(), mismatches);
+                std::fprintf(out, "FRAME\t%s\t%d\t%d\t%d\t%.2f\t%.3f\t%zu\t%s\t%zu\t%d\t%.4f\t%.4f\t%d\t%d\n", mapName,
+                    elevation, spot, heading, ms, coverage, ids.size(), gFirstPersonLastFrameGpu ? "gpu" : "software",
+                    windows.size(), mismatches, sampled > 0 ? static_cast<double>(leakVoid) / sampled : 0.0,
+                    sampled > 0 ? static_cast<double>(leakSky) / sampled : 0.0, gFirstPersonSolidFaces,
+                    gFirstPersonSealFaces);
                 frames++;
                 progress();
             }
