@@ -11,6 +11,7 @@
 #include "game/first_person_doorway.h"
 #include "game/first_person_facing.h"
 #include "game/first_person_material.h"
+#include "game/first_person_profile.h"
 
 #include <algorithm>
 #include <cmath>
@@ -1187,6 +1188,17 @@ static void first_person_render_now()
         return;
     }
 
+    // Opt-in stage timing (FALLOUT_FP_PROFILE=<file>); see first_person_profile.h.
+    static std::FILE* profileFile = [] {
+        const char* path = std::getenv("FALLOUT_FP_PROFILE");
+        return path != nullptr ? std::fopen(path, "w") : nullptr;
+    }();
+    static FirstPersonProfile profile;
+    auto profileMark = [](int stage) {
+        if (profileFile != nullptr) profile.mark(stage, SDL_GetPerformanceCounter());
+    };
+    if (profileFile != nullptr) profile.begin(SDL_GetPerformanceCounter());
+
     first_person_gpu_begin_frame();
     first_person_dump_map();
 
@@ -1275,6 +1287,8 @@ static void first_person_render_now()
         kFarPlane + 1.0);
     std::vector<double>& depthBuffer = gFirstPersonDepthBuffer;
     std::vector<double>& interactionDepth = gFirstPersonInteractionDepth;
+
+    profileMark(FP_PROFILE_SETUP);
 
     // v0.009: perspective-map Fallout's real floor tiles onto the ground.
     //
@@ -1478,6 +1492,8 @@ static void first_person_render_now()
         art_ptr_unlock(entry.cacheEntry);
     }
 
+    profileMark(FP_PROFILE_FLOOR);
+
     // v0.014: first-person mouse-to-world targeting.
     //
     // The mouse position defines a camera ray. Intersect that ray with the
@@ -1544,6 +1560,8 @@ static void first_person_render_now()
             }
         }
     }
+
+    profileMark(FP_PROFILE_TARGET);
 
     // Retain sparse depth guides for this build. They make it easy to see
     // whether the newly projected floor agrees with our established geometry.
@@ -2044,6 +2062,8 @@ static void first_person_render_now()
 
     constexpr double kStructuralWallHeight = 1.65;
 
+    profileMark(FP_PROFILE_TOPOLOGY);
+
     // Structural geometry and wall material are deliberately separate. Straight
     // pieces keep their own art; each corner arm first tries to borrow the
     // continuation wall's clean straight material. This avoids folding one
@@ -2209,6 +2229,8 @@ static void first_person_render_now()
             }
         }
     }
+
+    profileMark(FP_PROFILE_WALLS);
 
     // First-person doors are structural scenery. They occupy the same wall
     // lattice as the opening and participate in depth/pick testing, using
@@ -2475,6 +2497,8 @@ static void first_person_render_now()
         }
     }
 
+    profileMark(FP_PROFILE_DOORS);
+
     // v0.011: expose the rest of Fallout's map objects in first person.
     // This is intentionally a billboard pass for now: scenery, critters,
     // items and misc objects use their live FRM/frame/rotation, anchored to
@@ -2714,6 +2738,7 @@ static void first_person_render_now()
     if (gpuWorld) {
         static std::vector<unsigned char> gpuPixels;
         static std::vector<float> gpuDepth;
+        profileMark(FP_PROFILE_OBJECTS);
         static std::vector<std::uint32_t> gpuIds, gpuProxies;
         gpuPixels.resize(pixelCount); gpuDepth.resize(pixelCount);
         gpuIds.resize(pixelCount); gpuProxies.resize(pixelCount);
@@ -2757,6 +2782,8 @@ static void first_person_render_now()
     const int hoverX = width / 2;
     const int hoverY = height / 2;
     first_person_heap_check(gpuWorld ? "fp-world-gpu" : "fp-world-software");
+
+    profileMark(gpuWorld ? FP_PROFILE_GPU_READ : FP_PROFILE_OBJECTS);
 
     // Native Fallout outlines are painted by the isometric world renderer, so
     // they are not visible when the first-person scene replaces that renderer.
@@ -3458,6 +3485,16 @@ static void first_person_render_now()
     // The center reticle is now composed in the SDL GPU pass after the
     // software framebuffer upload. Keep the world renderer focused on scene
     // generation while we migrate more first-person drawing to the GPU.
+
+    profileMark(FP_PROFILE_OVERLAY);
+    if (profileFile != nullptr) {
+        char line[512];
+        if (profile.end(SDL_GetPerformanceCounter(), SDL_GetPerformanceFrequency(), map_data.name,
+                map_elevation, gpuWorld, line, sizeof(line))) {
+            std::fprintf(profileFile, "%s\n", line);
+            std::fflush(profileFile);
+        }
+    }
 
     if (viewWindow != display_win) {
         win_draw(viewWindow);

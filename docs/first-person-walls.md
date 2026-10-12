@@ -1393,3 +1393,17 @@ unchanged. The sweep's `SPRITES` rows (count, mean |x|/|y| offsets, worst
 2-7 px (24 in CAVES) with no empty rows, and items with 13 px offsets and 3.8 px
 of empty rows (worst 47).
 
+### Stage profile
+
+`FALLOUT_FP_PROFILE=<file>` times each first-person frame by stage (setup,
+floor and ceiling, targeting, wall topology, walls, doors, objects, GPU
+readback, overlay). Every 300 frames it writes
+`PROFILE map elevation renderer frames framesPerSecond total=avg/max` followed by
+`stage=avg/max` in milliseconds. Frames are only rendered while something
+changes, so framesPerSecond is the rate while moving or turning. The GPU
+readback stage also absorbs the GPU's own work, since reading back waits for it.
+
+```sh
+g++ -std=c++17 -Wall -Wextra -Werror -Isrc tests/first_person_profile_test.cc -o /tmp/fp-profile-test
+/tmp/fp-profile-test
+```
