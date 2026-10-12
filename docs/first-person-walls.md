@@ -1622,6 +1622,10 @@ data and the art's own outline (no per-asset lists):
   angle (25.7°), pivoting about the middle of its visible height, so the front
   comes forward and the top goes back (each by at most 0.35). Items still rest
   their lowest visible pixel on the floor.
+- Loose items (anything but containers: weapons, ammo, bags) always lean, even
+  when flagged flat (bags, ammo and packs are): laid on the floor a loot pile
+  read as a squashed rug. Container items (desks, lockers, shelves) are
+  furniture and go through the cases above.
 
 Critters are unchanged. The surfaces are real quads: the GPU path submits them
 as screen-pixel numerators and clips them at the near plane; the software

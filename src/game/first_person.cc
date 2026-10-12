@@ -3134,12 +3134,16 @@ static void first_person_render_now()
             // lockers). Thin outlines (signs, lamps) go on a wall or lean.
             const FirstPersonSpriteBoxFit& box = cachedBounds->second.box;
             const bool deepBox = box.ok && box.frontX - box.leftX >= 6.0 && box.rightX - box.frontX >= 6.0;
-            if ((native->flags & OBJECT_FLAT) != 0) {
+            // Loose items (weapons, ammo, bags, often flagged flat) read as a
+            // pile of small objects only when standing; container items are
+            // furniture (desks, lockers, shelves).
+            const bool looseItem = object.type == OBJ_TYPE_ITEM && item_get_type(native) != ITEM_TYPE_CONTAINER;
+            if (!looseItem && (native->flags & OBJECT_FLAT) != 0) {
                 wholeFrame(first_person_sprite_floor_quad(hexX, hexY, frame->width, frame->height,
                     offsetX, offsetY, 0.01));
-            } else if (deepBox) {
+            } else if (!looseItem && deepBox) {
                 faces = first_person_sprite_box_faces(box, hexX, hexY, frame->width, frame->height, offsetX, offsetY);
-            } else if (cachedBounds->second.wallAxis != FIRST_PERSON_SPRITE_AXIS_NONE) {
+            } else if (!looseItem && cachedBounds->second.wallAxis != FIRST_PERSON_SPRITE_AXIS_NONE) {
                 // The nearest drawn wall segment along the art's axis, within
                 // about a hex of the object; the art sits just in front of it,
                 // on the side the native camera sees.
