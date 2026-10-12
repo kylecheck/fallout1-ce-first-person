@@ -21,6 +21,9 @@ enum FirstPersonSpritePlacement {
     // Art painted along a wall (windows, vents, wall machinery): on that
     // wall's plane, unsheared as the wall art is.
     FIRST_PERSON_SPRITE_WALL,
+    // Box-shaped furniture (beds, tables, stoves, lockers): a box at the
+    // footprint its outline shows, each pixel on the face it depicts.
+    FIRST_PERSON_SPRITE_BOX,
 };
 
 // A sprite's surface: world corners for texture (0,0), (1,0), (1,1), (0,1),
@@ -149,6 +152,207 @@ inline FirstPersonSpriteWallAxis first_person_sprite_wall_axis(const unsigned ch
         if (fits(tops, slope) && fits(bottoms, slope)) return axis;
     }
     return FIRST_PERSON_SPRITE_AXIS_NONE;
+}
+
+// A box read from a frame's outline, in frame pixel coordinates (x right,
+// y down, both on pixel boundaries). An isometric box shows its two front
+// base edges as a V along the bottom of its outline: from the left corner
+// down along the North/South slope to the front corner, then up along the
+// East/West slope to the right corner. The back corner of the footprint
+// completes the parallelogram. The top of the outline is the top face's back
+// edges, height pixels above the footprint's back edges; anything rising
+// above that (a headboard, a lamp) reaches up to maxHeight.
+struct FirstPersonSpriteBoxFit {
+    bool ok = false;
+    double leftX = 0.0;
+    double frontX = 0.0;
+    double rightX = 0.0;
+    double frontY = 0.0;
+    double height = 0.0;
+    double maxHeight = 0.0;
+};
+
+// The footprint's front edges (the V) at x.
+inline double first_person_sprite_box_front_y(const FirstPersonSpriteBoxFit& box, double x)
+{
+    const double ns = first_person_sprite_axis_slope(FIRST_PERSON_SPRITE_AXIS_NORTH_SOUTH);
+    const double ew = first_person_sprite_axis_slope(FIRST_PERSON_SPRITE_AXIS_EAST_WEST);
+    return x < box.frontX ? box.frontY - ns * (box.frontX - x) : box.frontY + ew * (x - box.frontX);
+}
+
+// The footprint's back edges at x: from the left corner up the East/West
+// slope to the back corner, then down the North/South slope to the right.
+inline double first_person_sprite_box_back_y(const FirstPersonSpriteBoxFit& box, double x)
+{
+    const double ns = first_person_sprite_axis_slope(FIRST_PERSON_SPRITE_AXIS_NORTH_SOUTH);
+    const double ew = first_person_sprite_axis_slope(FIRST_PERSON_SPRITE_AXIS_EAST_WEST);
+    const double leftY = first_person_sprite_box_front_y(box, box.leftX);
+    const double rightY = first_person_sprite_box_front_y(box, box.rightX);
+    const double backX = box.leftX + box.rightX - box.frontX;
+    return x < backX ? leftY + ew * (x - box.leftX) : rightY - ns * (box.rightX - x);
+}
+
+inline FirstPersonSpriteBoxFit first_person_sprite_box_fit(const unsigned char* pixels, int width, int height)
+{
+    FirstPersonSpriteBoxFit box;
+    if (pixels == nullptr || width < 12 || height < 6) return box;
+    std::vector<double> tops(width, -1.0);
+    std::vector<double> bottoms(width, -1.0);
+    int first = -1;
+    int last = -1;
+    for (int x = 0; x < width; x++) {
+        for (int y = 0; y < height; y++) {
+            if (pixels[y * width + x] != 0) {
+                if (tops[x] < 0.0) tops[x] = y;
+                bottoms[x] = y + 1.0;
+            }
+        }
+        if (tops[x] >= 0.0) {
+            if (first < 0) first = x;
+            last = x;
+        }
+    }
+    if (first < 0 || last - first + 1 < 12) return box;
+    // Columns must be contiguous: a box's outline has no gaps.
+    for (int x = first; x <= last; x++) {
+        if (tops[x] < 0.0) return box;
+    }
+    const double ns = first_person_sprite_axis_slope(FIRST_PERSON_SPRITE_AXIS_NORTH_SOUTH);
+    const double ew = first_person_sprite_axis_slope(FIRST_PERSON_SPRITE_AXIS_EAST_WEST);
+    const int columns = last - first + 1;
+    const int trim = columns / 33;
+    // The front corner: the V the outline's bottom reaches near all three
+    // corners, with no column below it (but a few stray pixels).
+    double bestScore = -1.0;
+    for (int frontColumn = first; frontColumn <= last + 1; frontColumn++) {
+        FirstPersonSpriteBoxFit candidate;
+        candidate.leftX = first;
+        candidate.rightX = last + 1.0;
+        candidate.frontX = frontColumn;
+        std::vector<double> needed(columns);
+        for (int x = first; x <= last; x++) {
+            const double c = x + 0.5;
+            needed[x - first] = c < candidate.frontX
+                ? bottoms[x] + ns * (candidate.frontX - c)
+                : bottoms[x] - ew * (c - candidate.frontX);
+        }
+        std::vector<double> sorted = needed;
+        std::sort(sorted.begin(), sorted.end());
+        candidate.frontY = sorted[columns - 1 - trim];
+        // How close the outline comes to the V between two columns. Table
+        // tops overhang their legs, so the side corners may touch a little
+        // way in from the outline's ends.
+        auto touches = [&](int from, int to) {
+            double gap = 1.0e9;
+            for (int x = std::max(first, from); x <= std::min(last, to); x++) {
+                gap = std::min(gap, first_person_sprite_box_front_y(candidate, x + 0.5) - bottoms[x]);
+            }
+            return gap <= 3.0;
+        };
+        if (!touches(first, first + 12) || !touches(frontColumn - 4, frontColumn + 3) || !touches(last - 12, last)) {
+            continue;
+        }
+        // The V that hugs the outline closest: least area between them.
+        double gaps = 0.0;
+        for (int x = first; x <= last; x++) {
+            gaps += std::max(0.0, first_person_sprite_box_front_y(candidate, x + 0.5) - bottoms[x]);
+        }
+        const double score = 1.0e9 - gaps;
+        if (score > bestScore) {
+            bestScore = score;
+            box = candidate;
+        }
+    }
+    if (bestScore < 0.0) return FirstPersonSpriteBoxFit {};
+    // Height: the median rise from the back edges to the outline's top; the
+    // top must follow the back edges over most columns (a flat top). Raised
+    // parts over a minority of columns (a headboard) reach maxHeight. Chair
+    // backs and consoles' raised panels fail this and are not boxes.
+    std::vector<double> rises(columns);
+    for (int x = first; x <= last; x++) rises[x - first] = first_person_sprite_box_back_y(box, x + 0.5) - tops[x];
+    std::vector<double> sorted = rises;
+    std::sort(sorted.begin(), sorted.end());
+    box.height = sorted[columns / 2];
+    box.maxHeight = sorted[columns - 1];
+    int following = 0;
+    for (double rise : rises) following += std::abs(rise - box.height) <= 4.0;
+    if (box.height < 4.0 || following * 10 < columns * 6) return FirstPersonSpriteBoxFit {};
+    // The footprint's back corner must lie above the front corner.
+    if (first_person_sprite_box_back_y(box, box.leftX + box.rightX - box.frontX) > box.frontY) {
+        return FirstPersonSpriteBoxFit {};
+    }
+    box.ok = true;
+    return box;
+}
+
+// A face of a box: its world quad and, for each corner, the frame pixel
+// coordinates it shows (u right, v down, in pixels; outside the frame is
+// transparent).
+struct FirstPersonSpriteFace {
+    FirstPersonSpriteQuad quad;
+    double u[4];
+    double v[4];
+};
+
+// The faces of a fitted box for an object at a hex centre: two front faces,
+// the top and, where art rises above the top, two fins along the back edges.
+inline std::vector<FirstPersonSpriteFace> first_person_sprite_box_faces(const FirstPersonSpriteBoxFit& box,
+    double hexX, double hexY, int width, int height, int offsetX, int offsetY)
+{
+    std::vector<FirstPersonSpriteFace> faces;
+    if (!box.ok) return faces;
+    const double left = offsetX - width / 2;
+    const double top = offsetY - (height - 1);
+    // Ground points of the footprint corners.
+    auto ground = [&](double x, double y, double* wx, double* wy) {
+        double dx;
+        double dy;
+        first_person_sprite_iso_to_world(x + left, y + top, &dx, &dy);
+        *wx = hexX + dx;
+        *wy = hexY + dy;
+    };
+    double lx, ly, fx, fy, rx, ry;
+    ground(box.leftX, first_person_sprite_box_front_y(box, box.leftX), &lx, &ly);
+    ground(box.frontX, box.frontY, &fx, &fy);
+    ground(box.rightX, first_person_sprite_box_front_y(box, box.rightX), &rx, &ry);
+    const double bx = lx + rx - fx;
+    const double by = ly + ry - fy;
+    const double topHeight = box.height / kFirstPersonWallArtPixelsPerHeight;
+    const double maxHeight = box.maxHeight / kFirstPersonWallArtPixelsPerHeight;
+    auto face = [&](const double (&xs)[4], const double (&ys)[4], const double (&hs)[4]) {
+        FirstPersonSpriteFace f {};
+        for (int i = 0; i < 4; i++) {
+            f.quad.x[i] = xs[i];
+            f.quad.y[i] = ys[i];
+            f.quad.h[i] = hs[i];
+            const double dx = xs[i] - hexX;
+            const double dy = ys[i] - hexY;
+            const double isoX = kFirstPersonIsoXFromWorldX * dx + kFirstPersonIsoXFromWorldY * dy;
+            const double isoY = kFirstPersonIsoYFromWorldX * dx + kFirstPersonIsoYFromWorldY * dy
+                - hs[i] * kFirstPersonWallArtPixelsPerHeight;
+            f.u[i] = isoX - left;
+            f.v[i] = isoY - top;
+        }
+        faces.push_back(f);
+    };
+    face({ lx, fx, fx, lx }, { ly, fy, fy, ly }, { topHeight, topHeight, 0.0, 0.0 });
+    face({ fx, rx, rx, fx }, { fy, ry, ry, fy }, { topHeight, topHeight, 0.0, 0.0 });
+    face({ lx, bx, rx, fx }, { ly, by, ry, fy }, { topHeight, topHeight, topHeight, topHeight });
+    if (maxHeight > topHeight + 1.0 / kFirstPersonWallArtPixelsPerHeight) {
+        // Fins sit a little in front of the back edges, off any wall behind.
+        double inX = fx - bx;
+        double inY = fy - by;
+        const double length = std::sqrt(inX * inX + inY * inY);
+        if (length > 1.0e-9) {
+            inX *= 0.03 / length;
+            inY *= 0.03 / length;
+        }
+        face({ lx + inX, bx + inX, bx + inX, lx + inX }, { ly + inY, by + inY, by + inY, ly + inY },
+            { maxHeight, maxHeight, topHeight, topHeight });
+        face({ bx + inX, rx + inX, rx + inX, bx + inX }, { by + inY, ry + inY, ry + inY, by + inY },
+            { maxHeight, maxHeight, topHeight, topHeight });
+    }
+    return faces;
 }
 
 // A wall-painted frame on the vertical plane along axis through (lineX, lineY).

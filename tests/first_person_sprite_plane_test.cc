@@ -184,6 +184,104 @@ int main()
         assert(near(t, 3.0) && near(v, 0.75));
     }
 
+    // Box outlines: a solid box, a table on corner legs, and shapes that are
+    // not boxes.
+    {
+        FirstPersonSpriteBoxFit truth;
+        truth.leftX = 0.0;
+        truth.frontX = 40.0;
+        truth.rightX = 100.0;
+        truth.frontY = 70.0;
+        const int width = 100;
+        const int height = 72;
+        auto silhouette = [&](double rise, int legRows) {
+            std::vector<unsigned char> pixels(static_cast<size_t>(width) * height, 0);
+            for (int x = 0; x < width; x++) {
+                const double c = x + 0.5;
+                const double front = first_person_sprite_box_front_y(truth, c);
+                const double back = first_person_sprite_box_back_y(truth, c) - rise;
+                const bool leg = legRows > 0 && (x < 3 || std::abs(c - truth.frontX) < 2.0 || x >= width - 3);
+                const double bottom = legRows > 0 && !leg ? front - legRows : front;
+                for (int y = 0; y < height; y++) {
+                    if (y + 0.5 >= back && y + 0.5 < bottom) pixels[y * width + x] = 4;
+                }
+            }
+            return pixels;
+        };
+        std::vector<unsigned char> solid = silhouette(30.0, 0);
+        FirstPersonSpriteBoxFit fit = first_person_sprite_box_fit(solid.data(), width, height);
+        assert(fit.ok);
+        assert(near(fit.leftX, 0.0) && near(fit.rightX, 100.0));
+        assert(std::abs(fit.frontX - 40.0) <= 1.0);
+        assert(std::abs(fit.frontY - 70.0) <= 1.0);
+        assert(std::abs(fit.height - 30.0) <= 1.5);
+        assert(std::abs(fit.maxHeight - 30.0) <= 1.5);
+        // A table: the top and its front edge, legs only at the corners.
+        std::vector<unsigned char> table = silhouette(30.0, 18);
+        fit = first_person_sprite_box_fit(table.data(), width, height);
+        assert(fit.ok);
+        assert(std::abs(fit.frontX - 40.0) <= 1.5 && std::abs(fit.frontY - 70.0) <= 1.0);
+        // A headboard rising above part of the top reaches maxHeight.
+        std::vector<unsigned char> bed = silhouette(20.0, 0);
+        for (int x = 70; x < 100; x++) {
+            const double back = first_person_sprite_box_back_y(truth, x + 0.5);
+            for (int y = 0; y < height; y++) {
+                if (y + 0.5 >= back - 40.0 && y + 0.5 < back) bed[y * width + x] = 4;
+            }
+        }
+        fit = first_person_sprite_box_fit(bed.data(), width, height);
+        assert(fit.ok && std::abs(fit.height - 20.0) <= 1.5 && std::abs(fit.maxHeight - 40.0) <= 1.5);
+        // A blob that stands on one point is not a box.
+        std::vector<unsigned char> blob(static_cast<size_t>(width) * height, 0);
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                const double dx = (x - 50.0) / 50.0;
+                const double dy = (y - 36.0) / 36.0;
+                if (dx * dx + dy * dy < 1.0) blob[y * width + x] = 2;
+            }
+        }
+        assert(!first_person_sprite_box_fit(blob.data(), width, height).ok);
+        // Separate parts are not a box.
+        std::vector<unsigned char> parts = solid;
+        for (int y = 0; y < height; y++) parts[y * width + 50] = 0;
+        assert(!first_person_sprite_box_fit(parts.data(), width, height).ok);
+        assert(!first_person_sprite_box_fit(nullptr, width, height).ok);
+
+        // Faces: front faces stand on the V, the top is level at the height,
+        // and each face corner shows the frame pixel it projects to.
+        fit = first_person_sprite_box_fit(solid.data(), width, height);
+        const std::vector<FirstPersonSpriteFace> faces = first_person_sprite_box_faces(fit, 10.0, 20.0,
+            width, height, 0, 0);
+        assert(faces.size() == 3);
+        const double topHeight = fit.height / kFirstPersonWallArtPixelsPerHeight;
+        for (const FirstPersonSpriteFace& face : faces) {
+            for (int i = 0; i < 4; i++) {
+                assert(near(face.quad.h[i], 0.0) || near(face.quad.h[i], topHeight));
+                // Back through the forward projection to the frame.
+                double isoX;
+                double isoY;
+                worldToIso(face.quad.x[i] - 10.0, face.quad.y[i] - 20.0, &isoX, &isoY);
+                isoY -= face.quad.h[i] * kFirstPersonWallArtPixelsPerHeight;
+                assert(near(face.u[i], isoX - (0 - width / 2), 1.0e-6));
+                assert(near(face.v[i], isoY - (0 - (height - 1)), 1.0e-6));
+            }
+        }
+        // Front-left face bottom corners are the left and front corners.
+        assert(near(faces[0].u[3], fit.leftX, 1.0e-6) && near(faces[0].v[3], first_person_sprite_box_front_y(fit, fit.leftX), 1.0e-6));
+        assert(near(faces[0].u[2], fit.frontX, 1.0e-6) && near(faces[0].v[2], fit.frontY, 1.0e-6));
+        // The top's back corner shows the outline's top at the back corner.
+        const double backX = fit.leftX + fit.rightX - fit.frontX;
+        assert(near(faces[2].u[1], backX, 1.0e-6));
+        assert(near(faces[2].v[1], first_person_sprite_box_back_y(fit, backX) - fit.height, 1.0e-6));
+        // The front-left face runs along world y (North/South), the front-right
+        // along world x (East/West).
+        assert(near(faces[0].quad.x[0], faces[0].quad.x[1], 1.0e-6));
+        assert(near(faces[1].quad.y[0], faces[1].quad.y[1], 1.0e-6));
+        // With a headboard, two fins rise from the top to maxHeight.
+        fit = first_person_sprite_box_fit(bed.data(), width, height);
+        assert(first_person_sprite_box_faces(fit, 0.0, 0.0, width, height, 0, 0).size() == 5);
+    }
+
     std::cout << "first_person_sprite_plane_test: ok\n";
     return 0;
 }

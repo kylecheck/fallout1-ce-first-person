@@ -1595,6 +1595,23 @@ data and the art's own outline (no per-asset lists):
   within about a hex, 0.04 in front of it on the native camera's side. Columns
   keep their place along the wall and heights come from the isometric rise at
   60 px per unit, as for wall art. Windows, vents and wall panels use this.
+- Box-shaped furniture (tables, beds, desks, lockers, shelves, barrels,
+  footlockers) becomes a box. An isometric box's outline shows its two front
+  base edges as a V along the bottom (down the North/South slope to the
+  front corner, then up the East/West slope); the fit takes the V that hugs
+  the outline's bottom closest, reaching it near all three corners (side
+  corners up to 12 px in, since table tops overhang their legs), and the
+  height as the median rise from the footprint's back edges to the outline's
+  top, which must follow them over 60% of columns. The box stands at the
+  footprint the V shows, in the floor's isometric scale and 60 px per unit
+  of height: two front faces, the top, and two fins along the back edges
+  where art rises above the top (headboards). Each face shows the frame
+  pixels it projects to, so every pixel lands on the face it depicts and the
+  front edges touch the floor. Boxes need 6+ px of depth on both front
+  edges and win over the wall band (bookshelves are both). Chairs with
+  backs, consoles and other uneven tops fail the fit. The GPU samples box
+  faces from a copy of the frame with a transparent border; the whole face
+  is the pick proxy.
 - Everything else turns toward the viewer and leans back by the native camera's
   angle (25.7°), pivoting about the middle of its visible height, so the front
   comes forward and the top goes back (each by at most 0.35). Items still rest

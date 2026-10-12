@@ -3069,12 +3069,20 @@ static void first_person_render_now()
             | (static_cast<std::uint64_t>(static_cast<unsigned int>(object.fid)) << 16)
             | (static_cast<std::uint64_t>(frameNumber & 0x1FFF) << 3)
             | static_cast<std::uint64_t>(object.direction & 7);
-        struct OpaqueBounds { int minX; int minY; int maxX; int maxY; FirstPersonSpriteWallAxis wallAxis; };
+        struct OpaqueBounds {
+            int minX;
+            int minY;
+            int maxX;
+            int maxY;
+            FirstPersonSpriteWallAxis wallAxis;
+            FirstPersonSpriteBoxFit box;
+        };
         static std::unordered_map<std::uint64_t, OpaqueBounds> opaqueBoundsCache;
         auto cachedBounds = opaqueBoundsCache.find(spriteKey);
         if (cachedBounds == opaqueBoundsCache.end()) {
             OpaqueBounds bounds { frame->width, frame->height, -1, -1,
-                first_person_sprite_wall_axis(pixels, frame->width, frame->height) };
+                first_person_sprite_wall_axis(pixels, frame->width, frame->height),
+                first_person_sprite_box_fit(pixels, frame->width, frame->height) };
             for (int sy = 0; sy < frame->height; sy++) {
                 for (int sx = 0; sx < frame->width; sx++) {
                     if (pixels[sy * frame->width + sx] != 0) {
@@ -3096,8 +3104,10 @@ static void first_person_render_now()
 
         // Scenery and items keep their art but not the camera-facing card:
         // native flat objects lie on the floor, art painted along a wall goes
-        // on that wall, the rest turns toward the viewer and leans back by the
-        // isometric angle it was drawn at. Critters stay camera-facing.
+        // on that wall, box-shaped furniture becomes a box at the footprint
+        // its outline shows, and the rest turns toward the viewer and leans
+        // back by the isometric angle it was drawn at. Critters stay
+        // camera-facing.
         static const bool legacySprites = std::getenv("FALLOUT_FP_SPRITES_LEGACY") != nullptr;
         if (!legacySprites && (object.type == OBJ_TYPE_SCENERY || object.type == OBJ_TYPE_ITEM)) {
             Object* const native = object.object;
@@ -3106,12 +3116,24 @@ static void first_person_render_now()
             tileToWorld(native->tile, &hexX, &hexY);
             const int offsetX = art->xOffsets[object.direction] + native->x;
             const int offsetY = art->yOffsets[object.direction] + native->y;
-            FirstPersonSpriteQuad quad;
-            bool placed = false;
+            // Faces with the frame pixel each corner shows; a single
+            // full-frame face for every placement but the box.
+            std::vector<FirstPersonSpriteFace> faces;
+            auto wholeFrame = [&](const FirstPersonSpriteQuad& quad) {
+                faces.push_back({ quad,
+                    { 0.0, static_cast<double>(frame->width), static_cast<double>(frame->width), 0.0 },
+                    { 0.0, 0.0, static_cast<double>(frame->height), static_cast<double>(frame->height) } });
+            };
+            // A box needs depth along both front edges; it is furniture even
+            // when its outline is also a band along a wall (bookshelves,
+            // lockers). Thin outlines (signs, lamps) go on a wall or lean.
+            const FirstPersonSpriteBoxFit& box = cachedBounds->second.box;
+            const bool deepBox = box.ok && box.frontX - box.leftX >= 6.0 && box.rightX - box.frontX >= 6.0;
             if ((native->flags & OBJECT_FLAT) != 0) {
-                quad = first_person_sprite_floor_quad(hexX, hexY, frame->width, frame->height,
-                    offsetX, offsetY, 0.01);
-                placed = true;
+                wholeFrame(first_person_sprite_floor_quad(hexX, hexY, frame->width, frame->height,
+                    offsetX, offsetY, 0.01));
+            } else if (deepBox) {
+                faces = first_person_sprite_box_faces(box, hexX, hexY, frame->width, frame->height, offsetX, offsetY);
             } else if (cachedBounds->second.wallAxis != FIRST_PERSON_SPRITE_AXIS_NONE) {
                 // The nearest drawn wall segment along the art's axis, within
                 // about a hex of the object; the art sits just in front of it,
@@ -3121,6 +3143,7 @@ static void first_person_render_now()
                 double bestDistance = 1.2;
                 double lineX = 0.0;
                 double lineY = 0.0;
+                bool found = false;
                 for (const FirstPersonWallSprite& wall : walls) {
                     if (first_person_hex_distance(wall.tile, native->tile) > 2) continue;
                     for (const FirstPersonWallSegment& segment : first_person_wall_segments(
@@ -3137,24 +3160,33 @@ static void first_person_render_now()
                         bestDistance = distance;
                         lineX = northSouth ? segment.ax - 0.04 : hexX;
                         lineY = northSouth ? hexY : segment.ay + 0.04;
-                        placed = true;
+                        found = true;
                     }
                 }
-                if (placed) {
-                    quad = first_person_sprite_wall_quad(hexX, hexY, axis, lineX, lineY,
-                        frame->width, frame->height, offsetX, offsetY);
+                if (found) {
+                    wholeFrame(first_person_sprite_wall_quad(hexX, hexY, axis, lineX, lineY,
+                        frame->width, frame->height, offsetX, offsetY));
                 }
             }
-            if (!placed) {
+            const bool boxed = faces.size() > 1;
+            if (faces.empty()) {
                 const double drop = object.type == OBJ_TYPE_ITEM && opaqueMaxY >= 0
                     ? static_cast<double>(frame->height - 1 - opaqueMaxY) / frame->height
                     : 0.0;
-                quad = first_person_sprite_leaning_quad(hexX, hexY, playerWorldX, playerWorldY,
-                    worldWidth, worldHeight, drop, kFirstPersonIsoLean, 0.35);
+                wholeFrame(first_person_sprite_leaning_quad(hexX, hexY, playerWorldX, playerWorldY,
+                    worldWidth, worldHeight, drop, kFirstPersonIsoLean, 0.35));
             }
 
             // Camera space: x right, y up from the eye, z forward.
-            double corners[4][3];
+            auto toCamera = [&](double x, double y, double h, double* c) {
+                const double cdx = x - playerWorldX;
+                const double cdy = y - playerWorldY;
+                c[0] = cdx * rightX + cdy * rightY;
+                c[1] = h - kEyeHeight;
+                c[2] = cdx * forwardX + cdy * forwardY;
+            };
+            struct CameraFace { double c[4][3]; const FirstPersonSpriteFace* face; };
+            std::vector<CameraFace> cameraFaces;
             bool behind = false;
             bool anyInFront = false;
             double minZ = 1.0e30;
@@ -3162,24 +3194,26 @@ static void first_person_render_now()
             int boxTop = height;
             int boxRight = -1;
             int boxBottom = -1;
-            for (int corner = 0; corner < 4; corner++) {
-                const double cdx = quad.x[corner] - playerWorldX;
-                const double cdy = quad.y[corner] - playerWorldY;
-                corners[corner][0] = cdx * rightX + cdy * rightY;
-                corners[corner][1] = quad.h[corner] - kEyeHeight;
-                corners[corner][2] = cdx * forwardX + cdy * forwardY;
-                minZ = std::min(minZ, corners[corner][2]);
-                if (corners[corner][2] < kNearPlane) {
-                    behind = true;
-                    continue;
+            for (const FirstPersonSpriteFace& face : faces) {
+                CameraFace cameraFace;
+                cameraFace.face = &face;
+                for (int corner = 0; corner < 4; corner++) {
+                    double* c = cameraFace.c[corner];
+                    toCamera(face.quad.x[corner], face.quad.y[corner], face.quad.h[corner], c);
+                    minZ = std::min(minZ, c[2]);
+                    if (c[2] < kNearPlane) {
+                        behind = true;
+                        continue;
+                    }
+                    anyInFront = true;
+                    const double sx = width / 2.0 + c[0] * focal / c[2];
+                    const double sy = horizon - c[1] * focal / c[2];
+                    boxLeft = std::min(boxLeft, static_cast<int>(std::floor(sx)));
+                    boxRight = std::max(boxRight, static_cast<int>(std::ceil(sx)));
+                    boxTop = std::min(boxTop, static_cast<int>(std::floor(sy)));
+                    boxBottom = std::max(boxBottom, static_cast<int>(std::ceil(sy)));
                 }
-                anyInFront = true;
-                const double sx = width / 2.0 + corners[corner][0] * focal / corners[corner][2];
-                const double sy = horizon - corners[corner][1] * focal / corners[corner][2];
-                boxLeft = std::min(boxLeft, static_cast<int>(std::floor(sx)));
-                boxRight = std::max(boxRight, static_cast<int>(std::ceil(sx)));
-                boxTop = std::min(boxTop, static_cast<int>(std::floor(sy)));
-                boxBottom = std::max(boxBottom, static_cast<int>(std::ceil(sy)));
+                cameraFaces.push_back(cameraFace);
             }
             if (!anyInFront || minZ > kFarPlane) {
                 art_ptr_unlock(cacheEntry);
@@ -3204,31 +3238,59 @@ static void first_person_render_now()
             renderedObjectBounds.push_back({ native, native->id, boxLeft, boxTop, boxRight, boxBottom });
 
             if (gpuWorld) {
-                // Screen-pixel numerators: the GPU clips at the near plane.
+                // Box faces show parts of the frame and reach past its edges,
+                // which must read as transparent rather than clamp to the
+                // edge pixels: they sample a copy with a one-pixel border.
+                const unsigned char* texturePixels = pixels;
+                int textureWidth = frame->width;
+                int textureHeight = frame->height;
+                int border = 0;
+                std::uint64_t textureKey = spriteKey;
+                if (boxed) {
+                    static std::unordered_map<std::uint64_t, std::vector<unsigned char>> paddedFrames;
+                    std::vector<unsigned char>& padded = paddedFrames[spriteKey];
+                    if (padded.empty()) {
+                        padded.assign(static_cast<size_t>(frame->width + 2) * (frame->height + 2), 0);
+                        for (int y = 0; y < frame->height; y++) {
+                            std::memcpy(&padded[static_cast<size_t>(y + 1) * (frame->width + 2) + 1],
+                                pixels + static_cast<size_t>(y) * frame->width, frame->width);
+                        }
+                    }
+                    texturePixels = padded.data();
+                    textureWidth = frame->width + 2;
+                    textureHeight = frame->height + 2;
+                    border = 1;
+                    textureKey = spriteKey | (1ull << 60);
+                }
                 auto quadVertex = [&](const double* c, double u, double v) {
                     return FirstPersonGpuVertex { static_cast<float>(width / 2.0 * c[2] + c[0] * focal),
                         static_cast<float>(horizon * c[2] - focal * c[1]), static_cast<float>(c[2]),
-                        static_cast<float>(u), static_cast<float>(v) };
-                };
-                auto pointVertex = [&](double u, double v) {
-                    double px;
-                    double py;
-                    double ph;
-                    first_person_sprite_quad_point(quad, u, v, &px, &py, &ph);
-                    const double cdx = px - playerWorldX;
-                    const double cdy = py - playerWorldY;
-                    const double c[3] = { cdx * rightX + cdy * rightY, ph - kEyeHeight, cdx * forwardX + cdy * forwardY };
-                    return quadVertex(c, u, v);
+                        static_cast<float>((u + border) / textureWidth), static_cast<float>((v + border) / textureHeight) };
                 };
                 const std::uint32_t owner = gpuOwner(native);
-                const FirstPersonGpuVertex vertices[4] = {
-                    quadVertex(corners[0], 0.0, 0.0),
-                    quadVertex(corners[1], 1.0, 0.0),
-                    quadVertex(corners[2], 1.0, 1.0),
-                    quadVertex(corners[3], 0.0, 1.0),
-                };
-                first_person_world_gpu_quad(pixels, frame->width, frame->height, vertices, owner, false, 128.0f, spriteKey);
-                if (opaqueMaxX >= opaqueMinX && opaqueMaxY >= opaqueMinY) {
+                for (const CameraFace& cameraFace : cameraFaces) {
+                    const FirstPersonSpriteFace& face = *cameraFace.face;
+                    FirstPersonGpuVertex vertices[4];
+                    for (int corner = 0; corner < 4; corner++) {
+                        vertices[corner] = quadVertex(cameraFace.c[corner], face.u[corner], face.v[corner]);
+                    }
+                    first_person_world_gpu_quad(texturePixels, textureWidth, textureHeight, vertices, owner,
+                        false, 128.0f, textureKey);
+                    if (boxed) {
+                        first_person_world_gpu_quad(nullptr, 0, 0, vertices, owner, true);
+                    }
+                }
+                if (!boxed && opaqueMaxX >= opaqueMinX && opaqueMaxY >= opaqueMinY) {
+                    const FirstPersonSpriteQuad& quad = faces.front().quad;
+                    auto pointVertex = [&](double u, double v) {
+                        double px;
+                        double py;
+                        double ph;
+                        first_person_sprite_quad_point(quad, u, v, &px, &py, &ph);
+                        double c[3];
+                        toCamera(px, py, ph, c);
+                        return quadVertex(c, u * frame->width, v * frame->height);
+                    };
                     const double u0 = opaqueMinX / static_cast<double>(frame->width);
                     const double u1 = (opaqueMaxX + 1.0) / frame->width;
                     const double v0 = opaqueMinY / static_cast<double>(frame->height);
@@ -3242,42 +3304,54 @@ static void first_person_render_now()
                 continue;
             }
 
-            const double edgeU[3] = { corners[1][0] - corners[0][0], corners[1][1] - corners[0][1],
-                corners[1][2] - corners[0][2] };
-            const double edgeV[3] = { corners[3][0] - corners[0][0], corners[3][1] - corners[0][1],
-                corners[3][2] - corners[0][2] };
-            for (int screenY = boxTop; screenY <= boxBottom; screenY++) {
-                const double rayY = (horizon - screenY) / focal;
-                for (int screenX = boxLeft; screenX <= boxRight; screenX++) {
-                    double z;
-                    double u;
-                    double v;
-                    if (!first_person_sprite_ray_hit((screenX - width / 2.0) / focal, rayY,
-                            corners[0], edgeU, edgeV, &z, &u, &v)) {
-                        continue;
-                    }
-                    const int sourceX = std::min(frame->width - 1, static_cast<int>(u * frame->width));
-                    const int sourceY = std::min(frame->height - 1, static_cast<int>(v * frame->height));
-                    const int destination = screenY * width + screenX;
-                    if (opaqueMaxX >= opaqueMinX && opaqueMaxY >= opaqueMinY
-                        && sourceX >= opaqueMinX && sourceX <= opaqueMaxX
-                        && sourceY >= opaqueMinY && sourceY <= opaqueMaxY
-                        && z <= depthBuffer[destination] + 0.0001
-                        && z < interactionDepth[destination]) {
-                        interactionDepth[destination] = z;
-                        gFirstPersonInteractionPicks[destination] = { native, native->id };
-                    }
-                    const unsigned char pixel = pixels[sourceY * frame->width + sourceX];
-                    if (pixel != 0 && z < depthBuffer[destination]) {
-                        buffer[destination] = pixel;
-                        depthBuffer[destination] = z;
-                        gFirstPersonPicks[destination] = { native, native->id };
+            for (const CameraFace& cameraFace : cameraFaces) {
+                const FirstPersonSpriteFace& face = *cameraFace.face;
+                const double (&c)[4][3] = cameraFace.c;
+                const double edgeU[3] = { c[1][0] - c[0][0], c[1][1] - c[0][1], c[1][2] - c[0][2] };
+                const double edgeV[3] = { c[3][0] - c[0][0], c[3][1] - c[0][1], c[3][2] - c[0][2] };
+                for (int screenY = boxTop; screenY <= boxBottom; screenY++) {
+                    const double rayY = (horizon - screenY) / focal;
+                    for (int screenX = boxLeft; screenX <= boxRight; screenX++) {
+                        double z;
+                        double a;
+                        double b;
+                        if (!first_person_sprite_ray_hit((screenX - width / 2.0) / focal, rayY,
+                                c[0], edgeU, edgeV, &z, &a, &b)) {
+                            continue;
+                        }
+                        const double pu = face.u[0] + (face.u[1] - face.u[0]) * a + (face.u[3] - face.u[0]) * b;
+                        const double pv = face.v[0] + (face.v[1] - face.v[0]) * a + (face.v[3] - face.v[0]) * b;
+                        const int destination = screenY * width + screenX;
+                        // A box face is pickable over its whole surface, the
+                        // others over the frame's opaque bounds.
+                        const int sourceX = static_cast<int>(std::floor(pu));
+                        const int sourceY = static_cast<int>(std::floor(pv));
+                        const bool inFrame = sourceX >= 0 && sourceX < frame->width
+                            && sourceY >= 0 && sourceY < frame->height;
+                        const bool pickable = boxed
+                            || (inFrame && opaqueMaxX >= opaqueMinX && opaqueMaxY >= opaqueMinY
+                                && sourceX >= opaqueMinX && sourceX <= opaqueMaxX
+                                && sourceY >= opaqueMinY && sourceY <= opaqueMaxY);
+                        if (pickable
+                            && z <= depthBuffer[destination] + 0.0001
+                            && z < interactionDepth[destination]) {
+                            interactionDepth[destination] = z;
+                            gFirstPersonInteractionPicks[destination] = { native, native->id };
+                        }
+                        if (!inFrame) continue;
+                        const unsigned char pixel = pixels[sourceY * frame->width + sourceX];
+                        if (pixel != 0 && z < depthBuffer[destination]) {
+                            buffer[destination] = pixel;
+                            depthBuffer[destination] = z;
+                            gFirstPersonPicks[destination] = { native, native->id };
+                        }
                     }
                 }
             }
             art_ptr_unlock(cacheEntry);
             continue;
         }
+
         const int projectedWidth = std::max(1, static_cast<int>(focal * worldWidth / object.z));
         const int projectedHeight = std::max(1, static_cast<int>(focal * worldHeight / object.z));
         const int centerX = width / 2 + static_cast<int>(object.x * focal / object.z);
